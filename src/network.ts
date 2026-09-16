@@ -9,7 +9,8 @@ export interface RoomOptions {
 
 export function createProvider(doc: Y.Doc, opts: RoomOptions): WebrtcProvider {
   return new WebrtcProvider(opts.room, doc, {
-    signaling: [`wss://${opts.server}/room/${opts.room}`],
+    signaling: [`${opts.server}/room/${opts.room}`],
     password: opts.secret,
+    filterBcConns: false,
   });
 }

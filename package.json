@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
+    "signal": "y-webrtc-signaling",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test-deps": "playwright install chromium",
     "test": "vitest run",

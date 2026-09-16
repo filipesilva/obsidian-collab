@@ -79,11 +79,17 @@ npm run build
 
 ## Testing
 
-- Manual install for testing: copy `main.js`, `manifest.json`, `styles.css` (if any) to:
+- Unit tests: `npm test` runs vitest in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once.
+- Dev vaults: `~/repos/sandbox/obsidian-collab-a` and `-b`. Each has this repo symlinked as `.obsidian/plugins/obsidian-collab`, so `npm run build` is picked up on the next reload.
+- Dev signaling server: `npm run signal`, port 4444. Set the plugin's server setting to `ws://<lan ip>:4444`.
+- Drive Obsidian from the terminal with the CLI. `vault=` must come **before** the command, otherwise it is ignored and the command hits whichever window was focused last:
     ```
-    <Vault>/.obsidian/plugins/<plugin-id>/
+    obsidian vault=obsidian-collab-a plugin:reload id=obsidian-collab
+    obsidian vault=obsidian-collab-a eval code="app.commands.executeCommandById('obsidian-collab:hello')"
+    obsidian dev:errors
+    obsidian dev:debug on && obsidian dev:console level=error
     ```
-- Reload Obsidian and enable the plugin in **Settings → Community plugins**.
+- Two vaults in one Obsidian process share an origin. y-webrtc would link them over BroadcastChannel, so `createProvider` sets `filterBcConns: false` to force WebRTC.
 
 ## Commands & settings
 

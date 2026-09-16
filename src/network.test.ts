@@ -20,11 +20,11 @@ describe('createProvider', () => {
   it('constructs and destroys without touching the network', () => {
     const doc = new Y.Doc();
     const provider = createProvider(doc, {
-      server: 'localhost:1',
+      server: 'ws://localhost:1',
       room: 'test',
       secret: 'secret',
     });
-    expect(provider.signalingUrls).toEqual(['wss://localhost:1/room/test']);
+    expect(provider.signalingUrls).toEqual(['ws://localhost:1/room/test']);
     provider.destroy();
     doc.destroy();
   });
