@@ -18,4 +18,8 @@ doc is at `app.plugins.plugins['obsidian-collab'].session.docs.get(path)`.
   without a focused editor.
 - Rename the shared note. It stays shared under the new path. Delete it. It
   is unshared.
+- Start a session in one vault, join from another with the copied link.
+  The confirm modal names the server, the picker offers a new note, the
+  new note gets the host's content, edits flow both ways, both sides show
+  a peer count. End the session on the host, the guest's peer count drops.
 - Reload the plugin. `obsidian dev:errors` is empty.

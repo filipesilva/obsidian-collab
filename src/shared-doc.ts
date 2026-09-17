@@ -12,16 +12,17 @@ import { applyContent } from './sync';
 export class SharedDoc {
   private view: EditorView | null = null;
   private written = new Set<string>();
+  private adopting = false;
+  // Resolves once the note holds the shared text. Open the note after this.
+  readonly ready: Promise<void>;
 
-  private writeDisk = debounce(
-    () => {
-      const content = this.ytext.toString();
-      this.written.add(content);
-      void this.app.vault.modify(this.file, content);
-    },
-    200,
-    true,
-  );
+  private write = () => {
+    const content = this.ytext.toString();
+    this.written.add(content);
+    return this.app.vault.modify(this.file, content);
+  };
+
+  private writeDisk = debounce(() => void this.write(), 200, true);
 
   private onText = () => {
     if (!this.view) this.writeDisk();
@@ -32,15 +33,23 @@ export class SharedDoc {
   constructor(
     private app: App,
     public file: TFile,
+    readonly id: string,
     readonly ytext: Y.Text,
     adopt = false,
   ) {
     ytext.observe(this.onText);
-    this.rebind(adopt ? 'text' : 'editor');
-    if (adopt && !this.view) this.writeDisk();
+    this.ready = adopt ? this.adopt() : Promise.resolve();
+    if (!adopt) this.rebind();
   }
 
-  rebind(winner: Winner = 'editor'): void {
+  private async adopt(): Promise<void> {
+    this.adopting = true;
+    this.rebind();
+    if (!this.view) await this.write();
+    this.adopting = false;
+  }
+
+  rebind(winner: Winner = this.adopting ? 'text' : 'editor'): void {
     const views = this.app.workspace
       .getLeavesOfType('markdown')
       .map((leaf) => leaf.view as MarkdownView)

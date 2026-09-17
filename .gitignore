@@ -23,3 +23,8 @@ data.json
 
 # vitest browser cache
 .vitest
+
+# worker
+worker/node_modules
+worker/.wrangler
+.wrangler

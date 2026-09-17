@@ -81,7 +81,7 @@ npm run build
 
 - Unit tests: `npm test` runs vitest in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once.
 - Dev vaults: `~/repos/sandbox/obsidian-collab-a` and `-b`. Each has this repo symlinked as `.obsidian/plugins/obsidian-collab`, so `npm run build` is picked up on the next reload.
-- Dev signaling server: `npm run signal`, port 4444. Set the plugin's server setting to `ws://<lan ip>:4444`.
+- Signaling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Set the plugin's server setting to `ws://localhost:8787` or `ws://<lan ip>:8787`. Source and deploy notes in `worker/`.
 - Drive Obsidian from the terminal with the CLI. `vault=` must come **before** the command, otherwise it is ignored and the command hits whichever window was focused last:
     ```
     obsidian vault=obsidian-collab-a plugin:reload id=obsidian-collab

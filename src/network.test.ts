@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { createProvider } from './network';
+import { createProvider, iceUrl } from './network';
 
 describe('browser runtime', () => {
   it('has no Node globals, like Obsidian mobile', () => {
@@ -27,5 +27,12 @@ describe('createProvider', () => {
     expect(provider.signalingUrls).toEqual(['ws://localhost:1/room/test']);
     provider.destroy();
     doc.destroy();
+  });
+});
+
+describe('iceUrl', () => {
+  it('derives the https route from the signaling url', () => {
+    expect(iceUrl('wss://collab.example.com')).toBe('https://collab.example.com/ice');
+    expect(iceUrl('ws://localhost:8787')).toBe('http://localhost:8787/ice');
   });
 });
