@@ -36,22 +36,51 @@ export function openDoc(ydoc: Y.Doc, info: DocInfo): Y.Text {
   return entry.get('text') as Y.Text;
 }
 
+export interface Change {
+  from: number;
+  to: number;
+  insert: string;
+}
+
+// Minimal edits that turn before into after, positioned in before.
+export function diffChanges(before: string, after: string): Change[] {
+  const changes: Change[] = [];
+  let pos = 0;
+  for (const [op, chunk] of diff(before, after)) {
+    if (op === diff.INSERT) {
+      changes.push({ from: pos, to: pos, insert: chunk });
+    } else if (op === diff.DELETE) {
+      changes.push({ from: pos, to: pos + chunk.length, insert: '' });
+      pos += chunk.length;
+    } else {
+      pos += chunk.length;
+    }
+  }
+  return changes;
+}
+
 export function applyContent(text: Y.Text, content: string): void {
   const current = text.toString();
   if (current === content) return;
-  const ops = diff(current, content);
   if (!text.doc) throw new Error('text is not attached to a doc');
   text.doc.transact(() => {
-    let index = 0;
-    for (const [op, chunk] of ops) {
-      if (op === diff.INSERT) {
-        text.insert(index, chunk);
-        index += chunk.length;
-      } else if (op === diff.DELETE) {
-        text.delete(index, chunk.length);
-      } else {
-        index += chunk.length;
-      }
+    let shift = 0;
+    for (const { from, to, insert } of diffChanges(current, content)) {
+      if (to > from) text.delete(from + shift, to - from);
+      if (insert) text.insert(from + shift, insert);
+      shift += insert.length - (to - from);
     }
   });
+}
+
+// Calls back with the ids whose entry changed, after the Yjs transaction has
+// fully settled. Binding an editor inside the transaction would let it replay
+// events from before it was attached.
+export function observeDocs(ydoc: Y.Doc, cb: (id: string) => void): () => void {
+  const observer = (event: Y.YMapEvent<DocEntry>) => {
+    const ids = [...(event.keysChanged as Set<string>)];
+    queueMicrotask(() => ids.forEach(cb));
+  };
+  docs(ydoc).observe(observer);
+  return () => docs(ydoc).unobserve(observer);
 }

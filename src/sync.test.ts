@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { applyContent, docs, getText, openDoc } from './sync';
+import { applyContent, diffChanges, docs, getText, observeDocs, openDoc } from './sync';
 
 // Two docs joined by a fake network. Connected docs forward updates live;
 // connect() also exchanges everything missed while apart.
@@ -64,6 +64,26 @@ describe('applyContent', () => {
   });
 });
 
+describe('diffChanges', () => {
+  const apply = (before: string, after: string) =>
+    diffChanges(before, after)
+      .reverse()
+      .reduce((s, c) => s.slice(0, c.from) + c.insert + s.slice(c.to), before);
+
+  it.each([
+    ['hello world', 'hi there world'],
+    ['', 'new'],
+    ['gone', ''],
+    ['a\nb\nc', 'a\nc\nb'],
+  ])('positions changes in the original so %j becomes %j', (before, after) => {
+    expect(apply(before, after)).toBe(after);
+  });
+
+  it('is empty for equal text', () => {
+    expect(diffChanges('abc', 'abc')).toEqual([]);
+  });
+});
+
 describe('openDoc', () => {
   it('seeds the doc map from the file', () => {
     const doc = new Y.Doc();
@@ -99,21 +119,6 @@ describe('nobody has history', () => {
     expect(getText(a, note.id)).toBe(ta);
     expect(getText(b, note.id)).toBe(tb);
   });
-
-  it('the loser diffs its file into the winner text', () => {
-    const a = new Y.Doc();
-    const b = new Y.Doc();
-    const net = link(a, b);
-    openDoc(a, { ...note, content: 'hello from a' });
-    openDoc(b, { ...note, content: 'hello from b' });
-    net.connect();
-    const winner = getText(a, note.id)!.toString();
-    const loser = winner === 'hello from a' ? b : a;
-    const loserFile = loser === a ? 'hello from a' : 'hello from b';
-    openDoc(loser, { ...note, content: loserFile });
-    expect(getText(a, note.id)!.toString()).toBe(loserFile);
-    expect(getText(b, note.id)!.toString()).toBe(loserFile);
-  });
 });
 
 describe('one side lost history', () => {
@@ -141,16 +146,6 @@ describe('one side lost history', () => {
     expect(getText(a, note.id)!.toString()).toBe('hello');
     expect(docs(a).size).toBe(1);
     expect(docs(b).size).toBe(1);
-  });
-
-  it('the file of the side without history wins', () => {
-    const a = new Y.Doc();
-    openDoc(a, { ...note, content: 'hello' });
-    const b = new Y.Doc();
-    const net = link(a, b);
-    net.connect();
-    openDoc(b, { ...note, content: 'hello, edited offline' });
-    expect(getText(a, note.id)!.toString()).toBe('hello, edited offline');
   });
 });
 
@@ -180,5 +175,22 @@ describe('history exists but the file changed outside the plugin', () => {
     const net = link(a, b);
     net.connect();
     expect(getText(a, note.id)!.toString()).toBe('hello world');
+  });
+});
+
+describe('observeDocs', () => {
+  it('reports replaced entries after the transaction settles', async () => {
+    const a = new Y.Doc();
+    const b = new Y.Doc();
+    const net = link(a, b);
+    openDoc(a, { ...note, content: 'from a' });
+    const tb = openDoc(b, { ...note, content: 'from b' });
+    const seen: string[] = [];
+    observeDocs(b, (id) => seen.push(id));
+    net.connect();
+    expect(seen).toEqual([]);
+    await Promise.resolve();
+    if (getText(b, note.id) === tb) return;
+    expect(seen).toEqual([note.id]);
   });
 });

@@ -89,6 +89,7 @@ npm run build
     obsidian dev:errors
     obsidian dev:debug on && obsidian dev:console level=error
     ```
+- `CHECKLIST.md` lists the Obsidian-side checks to run after changes to editor binding or sessions.
 - Two vaults in one Obsidian process share an origin. y-webrtc would link them over BroadcastChannel, so `createProvider` sets `filterBcConns: false` to force WebRTC.
 
 ## Commands & settings

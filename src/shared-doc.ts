@@ -1,0 +1,68 @@
+import { App, MarkdownView, TFile, debounce } from 'obsidian';
+import type { EditorView } from '@codemirror/view';
+import type * as Y from 'yjs';
+import { Winner, bind, isBound, unbind } from './editor';
+import { applyContent } from './sync';
+
+// Keeps one note, its open editor and a shared text in agreement.
+// While a source-mode editor shows the file, it is the source of truth:
+// y-codemirror moves edits both ways and Obsidian saves to disk. Without one,
+// the text is written to disk and disk changes are diffed into the text.
+// Reading mode does not count: Obsidian ignores editor changes there.
+export class SharedDoc {
+  private view: EditorView | null = null;
+  private written = new Set<string>();
+
+  private writeDisk = debounce(
+    () => {
+      const content = this.ytext.toString();
+      this.written.add(content);
+      void this.app.vault.modify(this.file, content);
+    },
+    200,
+    true,
+  );
+
+  private onText = () => {
+    if (!this.view) this.writeDisk();
+  };
+
+  // With adopt, the shared text replaces the note: joining a live doc.
+  // Otherwise the note has already been diffed into the text.
+  constructor(
+    private app: App,
+    public file: TFile,
+    readonly ytext: Y.Text,
+    adopt = false,
+  ) {
+    ytext.observe(this.onText);
+    this.rebind(adopt ? 'text' : 'editor');
+    if (adopt && !this.view) this.writeDisk();
+  }
+
+  rebind(winner: Winner = 'editor'): void {
+    const views = this.app.workspace
+      .getLeavesOfType('markdown')
+      .map((leaf) => leaf.view as MarkdownView)
+      .filter((view) => view.file === this.file && view.getMode() === 'source')
+      .map((view) => (view.editor as unknown as { cm: EditorView }).cm);
+    if (this.view && views.includes(this.view) && isBound(this.view, this.ytext)) return;
+    if (this.view) unbind(this.view);
+    this.view = views[0] ?? null;
+    if (this.view) bind(this.view, this.ytext, winner);
+  }
+
+  async onModify(): Promise<void> {
+    if (this.view) return;
+    const content = await this.app.vault.read(this.file);
+    if (this.written.delete(content)) return;
+    applyContent(this.ytext, content);
+  }
+
+  destroy(): void {
+    this.writeDisk.cancel();
+    this.ytext.unobserve(this.onText);
+    if (this.view) unbind(this.view);
+    this.view = null;
+  }
+}
