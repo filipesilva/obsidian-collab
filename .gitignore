@@ -28,3 +28,13 @@ data.json
 worker/node_modules
 worker/.wrangler
 .wrangler
+
+# test vaults: keep their config, not what Obsidian and the plugin write while running
+test-vaults/*/.obsidian/app.json
+test-vaults/*/.obsidian/appearance.json
+test-vaults/*/.obsidian/graph.json
+test-vaults/**/*.md
+test-vaults/*/.obsidian/workspace.json
+test-vaults/*/.obsidian/workspace-mobile.json
+test-vaults/*/.obsidian/plugins
+test-vaults/*/.trash

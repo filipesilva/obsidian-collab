@@ -8,6 +8,9 @@ export default defineConfig(
     'dist',
     'worker',
     'test',
+    'scripts',
+    'test-vaults',
+    'vitest.config.ts',
     'esbuild.config.mjs',
     'version-bump.mjs',
     'versions.json',
@@ -23,7 +26,7 @@ export default defineConfig(
       },
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['eslint.config.mts', 'vitest.config.ts', 'manifest.json'],
+          allowDefaultProject: ['eslint.config.mts', 'manifest.json'],
         },
         tsconfigRootDir: import.meta.dirname,
         extraFileExtensions: ['.json'],

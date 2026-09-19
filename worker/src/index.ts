@@ -14,12 +14,13 @@ export default {
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('obsidian-collab signalling server', { status: 200 });
     }
-    if (env.RELAY_TOKEN && new URL(request.url).pathname !== `/${env.RELAY_TOKEN}`) {
+    const { pathname } = new URL(request.url);
+    if (env.RELAY_TOKEN && pathname !== `/${env.RELAY_TOKEN}`) {
       return new Response('unauthorized', { status: 401 });
     }
-    // One object serves every room because clients connect before saying
-    // which topics they want.
-    return env.RELAY.get(env.RELAY.idFromName('relay')).fetch(request);
+    // One object per path serves every room on it, because clients connect
+    // before saying which topics they want. Different paths never meet.
+    return env.RELAY.get(env.RELAY.idFromName(pathname)).fetch(request);
   },
 };
 

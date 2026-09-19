@@ -1,13 +1,14 @@
-import { Menu, Notice, Plugin, TFile, TFolder } from 'obsidian';
+import { Menu, Notice, Platform, Plugin, TFile, TFolder } from 'obsidian';
 import { Collab } from './collab';
 import { collabExtension } from './editor';
 import { FolderSync } from './folder';
 import { readInvite, readUrl, removeUrl, writeUrl } from './frontmatter';
-import { MARKER, markerPath } from './identity';
+import { MARKER, findById, markerPath } from './identity';
 import { Invite, inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
-import { AskUrl, Confirm, ConfirmJoin, createNote } from './join';
-import { type Status, pickRelays } from './network';
-import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, iceServers } from './settings';
+import { AskUrl, Confirm, ConfirmJoin, ShowText, createNote } from './join';
+import { checkNat, checkTurn, describeNat, listCandidates, liveRelays, probeSockets } from './nat';
+import { RELAY_COUNT, type Status, pickRelays } from './network';
+import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
 import type { StateStore } from './state';
 import { vaultStore } from './vault-store';
 
@@ -22,6 +23,11 @@ export default class CollabPlugin extends Plugin {
   private folders = new Map<string, FolderSync>();
   store!: StateStore;
   private statusBar!: HTMLElement;
+  private natCheckedAt = 0;
+  private statusUpdaters = new Map<string, () => void>();
+  private seenStatus = new Map<string, { attempts: number; failures: number }>();
+  private peerNotices = new Map<string, Notice>();
+  private failureTimers = new Map<string, number>();
 
   async onload() {
     await this.loadSettings();
@@ -154,6 +160,21 @@ export default class CollabPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: 'show-connected',
+      name: 'Show connected',
+      callback: () => void this.connectedSummary().then((text) => new Notice(text, 8000)),
+    });
+    this.addCommand({
+      id: 'diagnostics',
+      name: 'Diagnostics',
+      callback: () => void this.showDiagnostics(),
+    });
+    this.addCommand({
+      id: 'check-network',
+      name: 'Check network',
+      callback: () => void this.checkNetwork(true),
+    });
+    this.addCommand({
       id: 'stop-sharing-file',
       name: 'Stop sharing file',
       checkCallback: (checking) => {
@@ -257,10 +278,31 @@ export default class CollabPlugin extends Plugin {
     for (const collab of this.collabs.values()) collab.rebindAll();
   }
 
-  // Bottom bar: how many collabs are connected, click for the list.
+  private peerTotal(): number {
+    let peers = 0;
+    for (const collab of this.collabs.values()) peers += collab.peers;
+    return peers;
+  }
+
+  private async connectedSummary(): Promise<string> {
+    if (!this.collabs.size) return 'Collab: nothing connected';
+    const lines: string[] = [];
+    for (const collab of this.collabs.values()) {
+      const name = collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || 'the vault';
+      const paths = await collab.paths();
+      const detail = paths.length ? ` (${paths.join(', ')})` : '';
+      lines.push(`${name}: ${collab.peers} ${collab.peers === 1 ? 'peer' : 'peers'}${detail}`);
+    }
+    return `Collab: ${lines.join(', ')}`;
+  }
+
+  // Bottom bar: how many collabs are connected and how many peers in all,
+  // click for the list.
   private updateStatus() {
-    this.statusBar.setText(`${this.collabs.size} connected`);
-    this.statusBar.toggleClass('mod-clickable', this.collabs.size > 0);
+    const n = this.collabs.size;
+    const peers = this.peerTotal();
+    this.statusBar.setText(n ? `${n} connected, ${peers} ${peers === 1 ? 'peer' : 'peers'}` : '0 connected');
+    this.statusBar.toggleClass('mod-clickable', n > 0);
   }
 
   private showConnected(event: MouseEvent) {
@@ -281,10 +323,22 @@ export default class CollabPlugin extends Plugin {
     menu.showAtMouseEvent(event);
   }
 
-  private newInvite(): Invite | null {
-    const relays = pickRelays(this.settings.relays);
-    if (!relays.length) {
+  // Picks relays that answer right now. The URL carries them, so a dead
+  // one would burden every join forever.
+  private async newInvite(): Promise<Invite | null> {
+    if (!this.settings.relays.length) {
       new Notice('Collab: add a signalling server in settings first');
+      return null;
+    }
+    const notice = new Notice('Collab: checking relays…', 0);
+    let relays: string[];
+    try {
+      relays = await liveRelays(this.settings.relays, RELAY_COUNT);
+    } finally {
+      notice.hide();
+    }
+    if (!relays.length) {
+      new Notice('Collab: no signalling server answered. Check the network and the list in settings.', 10000);
       return null;
     }
     return { relays, id: randomId(), secret: randomId(16) };
@@ -292,18 +346,18 @@ export default class CollabPlugin extends Plugin {
 
   // Sharing is the only way a doc gets created.
   async shareFile(file: TFile) {
-    const invite = this.newInvite();
+    const invite = await this.newInvite();
     if (!invite) return;
     invite.file = file.basename;
     await writeUrl(this.app, file, inviteUrl(invite));
     const collab = await this.open(invite, file.path);
     await collab.seed(file, collab.id);
-    collab.connect();
     await this.copy(collab.url, file.basename);
+    await this.connectWith(collab, file.basename);
   }
 
   async shareFolder(folder: TFolder) {
-    const invite = this.newInvite();
+    const invite = await this.newInvite();
     if (!invite) return;
     const path = folder.isRoot() ? '' : folder.path;
     invite.folder = path;
@@ -321,8 +375,8 @@ export default class CollabPlugin extends Plugin {
     const sync = this.folderSync(collab);
     await sync.seed();
     sync.watch();
-    collab.connect();
     await this.copy(collab.url, folder.name || 'the vault');
+    await this.connectWith(collab, folder.name || 'the vault');
   }
 
   async joinUrl() {
@@ -342,6 +396,19 @@ export default class CollabPlugin extends Plugin {
     }
     if (!confirmed && !(await new ConfirmJoin(this.app, invite).ask())) return;
     if (invite.folder === undefined) {
+      // A note with this id may already be here from an earlier join.
+      const known = findById(
+        this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, url: readUrl(this.app, file) })),
+        invite.id,
+      );
+      const existing = known && this.app.vault.getFileByPath(known.path);
+      if (existing) {
+        await this.app.workspace.getLeaf(false).openFile(existing);
+        await this.connectFile(existing, invite);
+        return;
+      }
+      // A fresh join has no history by definition.
+      await this.store.remove(invite.id);
       const file = await createNote(this.app, invite.file ?? '');
       await writeUrl(this.app, file, inviteUrl(invite));
       await this.app.workspace.getLeaf(false).openFile(file);
@@ -360,6 +427,7 @@ export default class CollabPlugin extends Plugin {
       await this.connectFolder(existing);
       return;
     }
+    await this.store.remove(invite.id);
     await this.app.vault.createFolder(path);
     await this.writeMarker(path, inviteUrl(invite));
     await this.connectFolder(this.app.vault.getFolderByPath(path)!, invite, true);
@@ -375,18 +443,16 @@ export default class CollabPlugin extends Plugin {
     const collab = await this.open(invite, file.path);
     if (collab.hasState) {
       await collab.attach(file, collab.id);
-      collab.connect();
-      new Notice(`Collab: connected, editing ${file.basename}`);
+      await this.connectWith(collab, file.basename);
       return;
     }
     if (!fresh) this.noHistory(file.basename);
-    await this.waiting(collab, async () => {
+    await this.connectWith(collab, file.basename, async () => {
       if (!(await collab.waitFor(collab.id))) return false;
       const doc = await collab.attach(file, collab.id);
       await doc.ready;
       return true;
     });
-    if (this.collabs.has(collab.id)) new Notice(`Collab: connected, editing ${file.basename}`);
   }
 
   // The invite is passed when the marker was just written, since the
@@ -404,21 +470,20 @@ export default class CollabPlugin extends Plugin {
     }
     const collab = await this.open(invite, invite.folder);
     const sync = this.folderSync(collab);
+    const name = folder.name || 'the vault';
     if (collab.hasState) {
       await sync.reconcile();
       sync.watch();
-      collab.connect();
-      new Notice(`Collab: connected, ${folder.name || 'the vault'} is syncing`);
+      await this.connectWith(collab, name);
       return;
     }
-    if (!fresh) this.noHistory(folder.name || 'the vault');
-    await this.waiting(collab, async () => {
+    if (!fresh) this.noHistory(name);
+    await this.connectWith(collab, name, async () => {
       if (!(await collab.waitSynced())) return false;
       await sync.reconcile();
       sync.watch();
       return true;
     });
-    if (this.collabs.has(collab.id)) new Notice(`Collab: connected, ${folder.name || 'the vault'} is syncing`);
   }
 
   // State is a cache. Without it, local edits made meanwhile cannot merge.
@@ -429,17 +494,156 @@ export default class CollabPlugin extends Plugin {
     );
   }
 
-  // Connects with a progress notice that stays until the first sync, or
-  // until the collab is disconnected, which is how a wait is cancelled.
-  private async waiting(collab: Collab, then: () => Promise<boolean>) {
-    const notice = new Notice(progress(collab), 0);
+  // The network verdict. Shown on request, and folded into the failure
+  // notice when a connection fails: a strict network often connects anyway,
+  // so a warning up front would be noise.
+  private verdict: string | null = null;
+
+  async checkNetwork(always: boolean) {
+    if (!always && Date.now() - this.natCheckedAt < 60000) return;
+    this.natCheckedAt = Date.now();
+    const check = await checkNat(this.settings.stun, () => probeSockets(pickRelays(this.settings.relays, 5)));
+    const turn = turnServer(this.settings);
+    const worrying = !check.online || (!this.settings.turn.always && (check.needsTurn || check.symmetric));
+    this.verdict = worrying ? describeNat(check) : null;
+    if (always) new Notice(`Collab: ${describeNat(check)}.`, worrying ? 15000 : 5000);
+    if (turn && always && check.online) {
+      const ok = await checkTurn(turn);
+      new Notice(ok ? 'Collab: TURN works.' : 'Collab: TURN did not answer. Check the URL, username and credential in settings.', ok ? 5000 : 15000);
+    }
+  }
+
+  // Everything needed to debug a connection from afar, on the clipboard.
+  async showDiagnostics() {
+    const notice = new Notice('Collab: gathering diagnostics…', 0);
     try {
-      collab.connect(() => notice.setMessage(progress(collab)));
-      if (await then()) return;
-      if (this.collabs.has(collab.id)) await this.disconnect(collab);
+      new ShowText(this.app, 'Collab diagnostics', await this.diagnostics()).open();
     } finally {
       notice.hide();
     }
+  }
+
+  // Everything needed to debug a connection from afar, as text.
+  async diagnostics(): Promise<string> {
+    const started = Date.now();
+    const platform = Platform.isIosApp ? 'ios' : Platform.isAndroidApp ? 'android' : Platform.isMacOS ? 'macos' : Platform.isWin ? 'windows' : 'linux';
+    const lines: string[] = [`collab ${this.manifest.version} ${platform} ${new Date().toISOString()}`, `online=${navigator.onLine}`];
+    try {
+      const nat = await checkNat(this.settings.stun, () => probeSockets(pickRelays(this.settings.relays, 5)));
+      lines.push(`nat: ${JSON.stringify(nat)} -> ${describeNat(nat)}`);
+      const turn = turnServer(this.settings);
+      lines.push(`turn: ${turn ? `${String(turn.urls)} always=${this.settings.turn.always}` : 'none'}`);
+      if (turn) lines.push(`turn test: ${await checkTurn(turn)}`);
+      const withStun = await listCandidates({ iceServers: [{ urls: this.settings.stun }] });
+      // Candidate lines here start at the component: "1 udp <priority> <address> <port> typ …".
+      const publicAddresses = [...new Set(withStun.filter((l) => / typ srflx /.test(l)).map((l) => l.split(' ')[3]))];
+      lines.push(`public address: ${publicAddresses.join(', ') || 'none seen'}`);
+      lines.push(`network: ${describeNetwork(withStun)}${Platform.isIosApp ? ' (a guess: iOS marks every candidate as costly)' : ''}`);
+      lines.push('candidates with stun:');
+      for (const line of withStun) lines.push(`  ${line}`);
+      if (turn) {
+        lines.push('candidates with turn only:');
+        for (const line of await listCandidates({ iceServers: [turn], iceTransportPolicy: 'relay' })) lines.push(`  ${line}`);
+      }
+      for (const collab of this.collabs.values()) {
+        lines.push(`collab ${collab.path}: peers=${collab.peers} status=${JSON.stringify(collab.status())}`);
+        for (const line of await collab.describeConnections()) lines.push(`  ${line}`);
+      }
+    } catch (e) {
+      lines.push(`error: ${String(e)}`);
+    }
+    lines.push(`gathered in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    return lines.join('\n');
+  }
+
+  // Connects with a notice that stays until we know whether relays can
+  // reach us. Without saved state it then waits, visibly, for a peer to
+  // hand over the content. Disconnecting cancels either wait.
+  private async connectWith(collab: Collab, name: string, receive?: () => Promise<boolean>) {
+    const notice = new Notice(`Collab: connecting ${name}…`, 0);
+    const connecting = () => {
+      const { relays } = collab.status();
+      notice.setMessage(relays ? `Collab: connecting ${name}, ${relays} ${relays === 1 ? 'relay' : 'relays'} open…` : `Collab: connecting ${name}…`);
+    };
+    try {
+      collab.connect((status) => this.onStatus(collab, name, status));
+      this.statusUpdaters.set(collab.id, connecting);
+      connecting();
+      const reachable = await collab.waitReachable();
+      this.statusUpdaters.delete(collab.id);
+      if (!this.collabs.has(collab.id)) return;
+      if (!reachable) {
+        const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
+        new Notice(`Collab: ${name} could not reach any signalling server. Check the network and the signalling list. Still trying…${why}`, 15000);
+      } else if (!receive && !collab.peers) {
+        // A peer that arrived while the relays were being probed has
+        // already announced itself. Saying "waiting" after that reads
+        // backwards, and once one arrives the waiting is over.
+        const waiting = new Notice(`Collab: ${name} ready, waiting for peers…`);
+        this.statusUpdaters.set(collab.id, () => {
+          if (collab.peers) {
+            waiting.hide();
+            this.statusUpdaters.delete(collab.id);
+          }
+        });
+      }
+      if (!receive) return;
+      notice.setMessage(`Collab: waiting for someone who has ${name}…`);
+      this.statusUpdaters.set(collab.id, () => {
+        if (collab.peers) notice.setMessage(`Collab: receiving ${name}…`);
+      });
+      const received = await receive();
+      this.statusUpdaters.delete(collab.id);
+      if (received) new Notice(`Collab: received ${name}, editing`);
+      else if (this.collabs.has(collab.id)) await this.disconnect(collab);
+    } finally {
+      notice.hide();
+    }
+  }
+
+  // Peer stages after connecting: found, then connected or failed. Trystero
+  // retries, and on a strict NAT a retry often succeeds, so a failure is
+  // reported only when nothing has connected a few seconds after it.
+  private onStatus(collab: Collab, name: string, status: Status) {
+    // ICE events can still arrive from a collab that was just disconnected.
+    if (this.collabs.get(collab.id) !== collab) return;
+    this.statusUpdaters.get(collab.id)?.();
+    const seen = this.seenStatus.get(collab.id) ?? { attempts: 0, failures: 0 };
+    const hidePeerNotice = () => {
+      this.peerNotices.get(collab.id)?.hide();
+      this.peerNotices.delete(collab.id);
+    };
+    if (collab.peers) {
+      hidePeerNotice();
+      window.clearTimeout(this.failureTimers.get(collab.id));
+      this.failureTimers.delete(collab.id);
+    } else if (status.failures > seen.failures) {
+      // Relayed connections take longer to settle than direct ones.
+      const turn = !!turnServer(this.settings);
+      window.clearTimeout(this.failureTimers.get(collab.id));
+      this.failureTimers.set(
+        collab.id,
+        window.setTimeout(
+          () => {
+            this.failureTimers.delete(collab.id);
+            if (!this.collabs.has(collab.id) || collab.peers) return;
+            hidePeerNotice();
+            const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
+            new Notice(
+              turn
+                ? `Collab: a peer was found for ${name} but connections keep failing, even with TURN. Test the TURN settings.${why}`
+                : `Collab: a peer was found for ${name} but the connection failed. A TURN server in settings may help.${why}`,
+              12000,
+            );
+          },
+          turn ? 20000 : 8000,
+        ),
+      );
+    } else if (status.attempts > seen.attempts && !this.peerNotices.has(collab.id) && !collab.peers) {
+      this.peerNotices.set(collab.id, new Notice(`Collab: peer found for ${name}, connecting…`, 0));
+    }
+    this.seenStatus.set(collab.id, { attempts: status.attempts, failures: status.failures });
+    this.updateStatus();
   }
 
   private folderSync(collab: Collab): FolderSync {
@@ -449,7 +653,8 @@ export default class CollabPlugin extends Plugin {
   }
 
   private async open(invite: Invite, path: string): Promise<Collab> {
-    const collab = new Collab(this.app, invite, path, iceServers(this.settings), this.store);
+    void this.checkNetwork(false);
+    const collab = new Collab(this.app, invite, path, rtcConfig(this.settings), this.store);
     collab.onPeers = () => this.updateStatus();
     this.collabs.set(collab.id, collab);
     this.updateStatus();
@@ -473,6 +678,12 @@ export default class CollabPlugin extends Plugin {
   private async teardown(collab: Collab) {
     this.folders.get(collab.id)?.dispose();
     this.folders.delete(collab.id);
+    this.peerNotices.get(collab.id)?.hide();
+    this.peerNotices.delete(collab.id);
+    window.clearTimeout(this.failureTimers.get(collab.id));
+    this.failureTimers.delete(collab.id);
+    this.seenStatus.delete(collab.id);
+    this.statusUpdaters.delete(collab.id);
     await collab.disconnect();
   }
 
@@ -500,13 +711,22 @@ export default class CollabPlugin extends Plugin {
     new Notice(`Collab: ${folder.name || 'the vault'} is no longer shared`);
   }
 
+  // The clipboard can stall when the window is not focused. Never let that
+  // hold up sharing: the URL is in the property either way.
   async copy(url: string, name: string) {
-    await navigator.clipboard.writeText(url);
-    new Notice(`Collab: URL for ${name} copied`);
+    const timeout = new Promise<'timeout'>((resolve) => window.setTimeout(() => resolve('timeout'), 3000));
+    try {
+      const result = await Promise.race([navigator.clipboard.writeText(url), timeout]);
+      if (result === 'timeout') throw new Error('clipboard timed out');
+      new Notice(`Collab: URL for ${name} copied`);
+    } catch {
+      new Notice(`Collab: could not copy. The URL for ${name} is in its collab-url property.`, 8000);
+    }
   }
 
   async loadSettings() {
-    this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) as Partial<CollabSettings>) };
+    const saved = (await this.loadData()) as Partial<CollabSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...saved, turn: { ...DEFAULT_SETTINGS.turn, ...saved?.turn } };
   }
 
   async saveSettings() {
@@ -514,11 +734,15 @@ export default class CollabPlugin extends Plugin {
   }
 }
 
-function progress(collab: Collab): string {
-  const status: Status = collab.status();
-  if (collab.peers) return `Collab: connected to ${collab.peers} ${collab.peers === 1 ? 'peer' : 'peers'}, nothing shared has arrived yet. Waiting…`;
-  if (status.iceFailed) return 'Collab: found a peer but the connection failed, a TURN server in settings may help. Still trying…';
-  if (status.peerFound) return 'Collab: peer found, connecting…';
-  if (status.relays) return `Collab: waiting for someone through ${status.relays} ${status.relays === 1 ? 'relay' : 'relays'}…`;
-  return 'Collab: connecting to signalling servers…';
+// The kind of network, read off the candidates' network-cost: 999 is
+// cellular, 10 wifi, 0 wired. Several kinds can be up at once.
+function describeNetwork(candidates: string[]): string {
+  const costs = new Set<number>();
+  for (const line of candidates) {
+    const m = /network-cost (\d+)/.exec(line);
+    if (m) costs.add(Number(m[1]));
+  }
+  if (!costs.size) return 'unknown';
+  const names = [...costs].sort((a, b) => a - b).map((c) => (c >= 900 ? 'cellular' : c >= 10 ? 'wifi' : 'wired'));
+  return [...new Set(names)].join(' and ');
 }

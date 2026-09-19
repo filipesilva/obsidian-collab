@@ -27,7 +27,7 @@ export class Collab {
     readonly invite: Invite,
     // The file's path, or the folder's path.
     public path: string,
-    private iceServers: RTCIceServer[],
+    private rtc: RTCConfiguration,
     store: StateStore,
   ) {
     this.persistence = new Persistence(this.ydoc, invite.id, store);
@@ -58,10 +58,10 @@ export class Collab {
 
   connect(onStatus?: (status: Status) => void): void {
     const { relays, id, secret } = this.invite;
-    this.provider = new Provider(this.ydoc, { relays, room: id, secret, iceServers: this.iceServers });
+    this.provider = new Provider(this.ydoc, { relays, room: id, secret, rtc: this.rtc });
     this.provider.onStatus = onStatus ?? null;
     this.provider.onPeers = (count) => {
-      new Notice(`Collab: ${count} ${count === 1 ? 'peer' : 'peers'} connected`);
+      new Notice(count ? `Collab: ${count} ${count === 1 ? 'peer' : 'peers'} connected` : 'Collab: no peers connected');
       onStatus?.(this.status());
       this.onPeers?.(count);
     };
@@ -71,11 +71,26 @@ export class Collab {
   }
 
   status(): Status {
-    return this.provider?.status() ?? { relays: 0, peerFound: false, iceFailed: false };
+    return this.provider?.status() ?? { relays: 0, attempts: 0, failures: 0 };
   }
 
   get peers(): number {
     return this.provider?.peers.length ?? 0;
+  }
+
+  // Whether any relay answered, so others can find us. False on timeout or
+  // disconnect.
+  waitReachable(): Promise<boolean> {
+    if (!this.provider) return Promise.resolve(false);
+    return Promise.race([this.provider.reachable, new Promise<boolean>((resolve) => this.waiters.add(resolve))]);
+  }
+
+  describeConnections(): Promise<string[]> {
+    return this.provider?.describeConnections() ?? Promise.resolve([]);
+  }
+
+  paths(): Promise<string[]> {
+    return this.provider?.paths() ?? Promise.resolve([]);
   }
 
   has(id: string): boolean {

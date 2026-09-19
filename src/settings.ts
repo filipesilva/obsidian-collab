@@ -1,11 +1,14 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, type SettingDefinitionItem } from 'obsidian';
 import type CollabPlugin from './main';
+import { checkTurn } from './nat';
 import { DEFAULT_RELAYS, DEFAULT_STUN } from './network';
 
 export interface TurnSettings {
   url: string;
   username: string;
   credential: string;
+  // Skip direct attempts and always go through the relay.
+  always: boolean;
 }
 
 export interface CollabSettings {
@@ -17,18 +20,25 @@ export interface CollabSettings {
 export const DEFAULT_SETTINGS: CollabSettings = {
   relays: DEFAULT_RELAYS,
   stun: DEFAULT_STUN,
-  turn: { url: '', username: '', credential: '' },
+  turn: { url: '', username: '', credential: '', always: false },
 };
 
 const DOCS = 'https://github.com/filipesilva/obsidian-collab/blob/master/README.md';
 
-export function iceServers(settings: CollabSettings): RTCIceServer[] {
-  const servers: RTCIceServer[] = [];
-  if (settings.stun.length) servers.push({ urls: settings.stun });
-  if (settings.turn.url) {
-    servers.push({ urls: settings.turn.url, username: settings.turn.username, credential: settings.turn.credential });
-  }
-  return servers;
+// A bare host:port is taken as turn:host:port.
+export function turnServer(settings: CollabSettings): RTCIceServer | null {
+  const { url, username, credential } = settings.turn;
+  if (!url) return null;
+  const urls = /^turns?:/.test(url) ? url : `turn:${url}`;
+  return { urls, username, credential };
+}
+
+export function rtcConfig(settings: CollabSettings): RTCConfiguration {
+  const iceServers: RTCIceServer[] = [];
+  if (settings.stun.length) iceServers.push({ urls: settings.stun });
+  const turn = turnServer(settings);
+  if (turn) iceServers.push(turn);
+  return turn && settings.turn.always ? { iceServers, iceTransportPolicy: 'relay' } : { iceServers };
 }
 
 function lines(value: string): string[] {
@@ -38,6 +48,7 @@ function lines(value: string): string[] {
     .filter(Boolean);
 }
 
+// Textareas hold one server per line, and the TURN fields live under `turn`.
 export class CollabSettingTab extends PluginSettingTab {
   plugin: CollabPlugin;
 
@@ -46,82 +57,115 @@ export class CollabSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
+  getSettingDefinitions(): SettingDefinitionItem[] {
     const { settings } = this.plugin;
-
-    this.list(
-      'Signalling servers',
-      'Nostr relays where peers find each other, one per line. A collab dials a few of them and its URL tells guests which. They see your IP address and a room id, never the notes.',
-      'signalling',
-      () => settings.relays,
-      (value) => (settings.relays = value),
-      DEFAULT_RELAYS,
-    );
-
-    this.list(
-      'STUN servers',
-      'Help peers discover their public address so they can connect directly, one per line.',
-      'stun',
-      () => settings.stun,
-      (value) => (settings.stun = value),
-      DEFAULT_STUN,
-    );
-
-    new Setting(containerEl)
-      .setName('TURN server')
-      .setDesc(
-        this.desc(
-          'Relays traffic when a direct connection fails, for example on mobile networks. Only the peer behind the strict network needs one, as turn:host:3478. Leave empty unless connections fail.',
-          'turn',
-        ),
-      )
-      .addText((text) =>
-        text
-          .setValue(settings.turn.url)
-          .onChange((value) => this.save(() => (settings.turn.url = value.trim()))),
-      );
-    new Setting(containerEl)
-      .setName('TURN username')
-      .addText((text) =>
-        text.setValue(settings.turn.username).onChange((value) => this.save(() => (settings.turn.username = value.trim()))),
-      );
-    new Setting(containerEl)
-      .setName('TURN credential')
-      .addText((text) => {
-        text.inputEl.type = 'password';
-        text
-          .setValue(settings.turn.credential)
-          .onChange((value) => this.save(() => (settings.turn.credential = value.trim())));
-      });
-  }
-
-  private list(
-    name: string,
-    description: string,
-    anchor: string,
-    get: () => string[],
-    set: (value: string[]) => void,
-    defaults: string[],
-  ) {
-    new Setting(this.containerEl)
-      .setName(name)
-      .setDesc(this.desc(description, anchor))
-      .addTextArea((area) => {
-        area.inputEl.rows = 5;
-        area.inputEl.cols = 40;
-        area.setValue(get().join('\n')).onChange((value) => this.save(() => set(lines(value))));
-      })
-      .addExtraButton((button) =>
+    const reset = (apply: () => void) => [
+      (button: import('obsidian').ExtraButtonComponent) =>
         button
           .setIcon('rotate-ccw')
           .setTooltip('Reset to defaults')
           .onClick(() => {
-            this.save(() => set([...defaults]));
-            this.display();
+            apply();
+            void this.plugin.saveSettings();
+            this.update();
           }),
-      );
+    ];
+    return [
+      {
+        type: 'group',
+        heading: 'Signalling',
+        extraButtons: reset(() => (settings.relays = [...DEFAULT_RELAYS])),
+        items: [
+          {
+            name: 'Servers',
+            desc: this.desc(
+              'Nostr relays where peers find each other, one per line. A collab dials a few of them and its URL tells guests which. They see your IP address and a room id, never the notes.',
+              'signalling',
+            ),
+            control: { type: 'textarea', key: 'relays', rows: 5 },
+          },
+        ],
+      },
+      {
+        type: 'group',
+        heading: 'STUN',
+        extraButtons: reset(() => (settings.stun = [...DEFAULT_STUN])),
+        items: [
+          {
+            name: 'Servers',
+            desc: this.desc('Help peers discover their public address so they can connect directly, one per line.', 'stun'),
+            control: { type: 'textarea', key: 'stun', rows: 5 },
+          },
+        ],
+      },
+      {
+        type: 'group',
+        heading: 'TURN',
+        items: [
+          {
+            name: 'Server',
+            desc: this.desc(
+              'Relays traffic when a direct connection fails, for example on mobile networks. Only the peer behind the strict network needs one, as turn:host:3478. Leave empty unless connections fail.',
+              'turn',
+            ),
+            control: { type: 'text', key: 'turn.url' },
+          },
+          { name: 'Username', control: { type: 'text', key: 'turn.username' } },
+          {
+            name: 'Credential',
+            render: (setting: Setting) => {
+              setting.addText((text) => {
+                text.inputEl.type = 'password';
+                text.setValue(settings.turn.credential).onChange((value) => {
+                  settings.turn.credential = value.trim();
+                  void this.plugin.saveSettings();
+                });
+              });
+            },
+          },
+          {
+            name: 'Always relay',
+            desc: 'Skip direct connection attempts and always go through the TURN server. For networks where direct connections keep failing.',
+            control: { type: 'toggle', key: 'turn.always' },
+          },
+          {
+            name: 'Test',
+            desc: 'Asks the server for a relay with these credentials.',
+            render: (setting: Setting) => {
+              setting.addButton((button) =>
+                button.setButtonText('Test').onClick(async () => {
+                  const turn = turnServer(settings);
+                  if (!turn) return void new Notice('Collab: fill in the TURN server first');
+                  button.setDisabled(true).setButtonText('Testing…');
+                  const ok = await checkTurn(turn);
+                  button.setDisabled(false).setButtonText('Test');
+                  new Notice(ok ? 'Collab: TURN works' : 'Collab: TURN did not answer. Check the URL, username and credential.', 8000);
+                }),
+              );
+            },
+          },
+        ],
+      },
+    ];
+  }
+
+  getControlValue(key: string): unknown {
+    const { settings } = this.plugin;
+    if (key === 'relays') return settings.relays.join('\n');
+    if (key === 'stun') return settings.stun.join('\n');
+    if (key === 'turn.always') return settings.turn.always;
+    if (key.startsWith('turn.')) return settings.turn[key.slice(5) as 'url' | 'username' | 'credential'];
+    return undefined;
+  }
+
+  setControlValue(key: string, value: unknown): Promise<void> {
+    const { settings } = this.plugin;
+    const text = String(value);
+    if (key === 'relays') settings.relays = lines(text);
+    else if (key === 'stun') settings.stun = lines(text);
+    else if (key === 'turn.always') settings.turn.always = value === true;
+    else if (key.startsWith('turn.')) settings.turn[key.slice(5) as 'url' | 'username' | 'credential'] = text.trim();
+    return this.plugin.saveSettings();
   }
 
   private desc(text: string, anchor: string): DocumentFragment {
@@ -129,10 +173,5 @@ export class CollabSettingTab extends PluginSettingTab {
       fragment.appendText(`${text} `);
       fragment.createEl('a', { text: 'Self-hosting and details.', href: `${DOCS}#${anchor}` });
     });
-  }
-
-  private save(apply: () => void) {
-    apply();
-    void this.plugin.saveSettings();
   }
 }

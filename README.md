@@ -38,9 +38,19 @@ firewalls, a TURN server relays the encrypted traffic. Only the peer on the
 strict network needs one, and it fixes every connection that peer makes. Most
 people never need it.
 
-If connections fail, get TURN credentials and fill them in. The
-[Open Relay](https://www.metered.ca/tools/openrelay/) free tier works, or
-run [coturn](https://github.com/coturn/coturn) on a machine with a public IP.
+The **Check network** command tells you whether this network needs one, and
+the plugin says so on its own when you connect without TURN configured.
+If it does, get TURN credentials and fill in the URL, username and
+credential. A note session moves kilobytes, so any free tier is plenty:
+
+- [ExpressTURN](https://www.expressturn.com/): 100 GB a month, no card.
+- [Metered Open Relay](https://www.metered.ca/tools/openrelay/): 0.5 GB a
+  month, 20 GB with a card on file, and it stops rather than bills.
+- [Xirsys](https://xirsys.com/): 0.5 GB a month.
+
+Or run [coturn](https://github.com/coturn/coturn) on a machine with a
+public IP. Cloudflare's TURN only issues short-lived credentials, so it
+needs a small service to mint them and is not supported yet.
 
 ## Development
 
@@ -49,9 +59,10 @@ npm install
 npm run test-deps  # downloads chromium for the tests
 npm run dev     # esbuild watch
 npm run build   # typecheck and bundle main.js
-npm test        # vitest in headless Chromium, offline
-npm run test-online  # also the test that uses public relays
+npm test        # fast tests in headless Chromium, no servers
+npm run test-network  # network tests: local relay and TURN, plus public relays
 npm run lint
+npm run e2e     # end to end, drives two open dev vaults through the checklist
 ```
 
 Tests run in a real browser with no Node globals, because Obsidian mobile

@@ -45,8 +45,11 @@ npx wrangler secret put RELAY_TOKEN
 ```
 
 Then the relay only accepts `wss://<host>/<token>`. Use that full URL in the
-signalling servers. Invite links carry it to guests, so share links only
-with people who should have it.
+signalling servers. Invite URLs carry it to guests, so share them only with
+people who should have it.
+
+Without a token, every path is its own relay: peers on `wss://<host>/a`
+never see peers on `wss://<host>/b`.
 
 ## Cost
 

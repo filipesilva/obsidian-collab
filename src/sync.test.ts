@@ -216,3 +216,21 @@ describe('observeEntries', () => {
     expect(seen).toEqual(['add:n', 'update:n', 'delete:n']);
   });
 });
+
+describe('update events', () => {
+  // Forwarding received updates to other peers relies on this: an update
+  // the doc already has emits nothing, so a forward can never loop.
+  it('fire only when an update changes the doc', () => {
+    const a = new Y.Doc();
+    const b = new Y.Doc();
+    a.getText('t').insert(0, 'hello');
+    const update = Y.encodeStateAsUpdate(a);
+    let events = 0;
+    b.on('update', () => events++);
+    Y.applyUpdate(b, update);
+    Y.applyUpdate(b, update);
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    expect(events).toBe(1);
+    expect(b.getText('t').toString()).toBe('hello');
+  });
+});

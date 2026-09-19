@@ -26,7 +26,19 @@ export class SharedDoc {
 
   private onText = () => {
     if (!this.view) this.writeDisk();
+    else queueMicrotask(() => this.verify());
   };
+
+  // A bound editor must mirror the text exactly, or every later remote
+  // change lands in the wrong place. If they ever drift, say so and make
+  // the editor follow the text, which is what the peers have.
+  private verify() {
+    const view = this.view;
+    if (!view || view.state.doc.length === this.ytext.length) return;
+    console.error('collab: editor drifted from the shared text', this.file.path, view.state.doc.length, this.ytext.length);
+    unbind(view);
+    bind(view, this.ytext, 'text');
+  }
 
   // With adopt, the shared text replaces the note: joining a live doc.
   // Otherwise the note has already been diffed into the text.

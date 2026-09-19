@@ -8,6 +8,9 @@ export const APP_ID = 'obsidian-collab';
 export const RELAY_COUNT = 5;
 const RELAY_PROBE_MS = 4000;
 const RELAY_CHECK_INTERVAL_MS = 30000;
+const ALONE_INTERVAL_MS = 10000;
+const PEER_PING_TIMEOUT_MS = 5000;
+const REACHABLE_TIMEOUT_MS = 10000;
 export const DEFAULT_RELAYS: string[] = defaultRelayUrls;
 export const DEFAULT_STUN = [
   'stun:stun.l.google.com:19302',
@@ -20,7 +23,7 @@ export interface RoomOptions {
   room: string;
   secret: string;
   relays: string[];
-  iceServers?: RTCIceServer[];
+  rtc?: RTCConfiguration;
 }
 
 // Every peer must dial the same relays to meet, so the host picks a few and
@@ -35,10 +38,14 @@ export function pickRelays(relays: string[], count = RELAY_COUNT): string[] {
 }
 
 // Where a connection attempt got to, for progress and failure messages.
+// Trystero keeps a pool of idle connections (3, patched down from 20 in
+// patches/, see dmotz/trystero#197), so only ICE moving past 'new' means a
+// real peer answered. Counters, so a caller can tell a new attempt or
+// failure from an old one.
 export interface Status {
   relays: number;
-  peerFound: boolean;
-  iceFailed: boolean;
+  attempts: number;
+  failures: number;
 }
 
 // Syncs a Y.Doc with every peer in a Trystero room using the Yjs sync
@@ -47,10 +54,16 @@ export class Provider {
   private room!: Room;
   private sync!: MessageAction<Uint8Array>;
   private peerIds = new Set<string>();
-  private peerFound = false;
-  private iceFailed = false;
+  private attempts = 0;
+  private failures = 0;
+  // Every peer connection Trystero created and has not closed, pool included.
+  private pcs = new Set<RTCPeerConnection>();
   private destroyed = false;
-  private checkTimer: number;
+  private resolveReachable!: (ok: boolean) => void;
+  // Whether any relay answered. Settled by the first reply, or the timeout.
+  readonly reachable: Promise<boolean>;
+  private checkTimer = 0;
+  private attemptsAtLastTick = 0;
   private rtcConfig: RTCConfiguration;
   synced = false;
   onPeers: ((count: number) => void) | null = null;
@@ -61,21 +74,100 @@ export class Provider {
     private doc: Y.Doc,
     private opts: RoomOptions,
   ) {
-    this.rtcConfig = { iceServers: opts.iceServers ?? [] };
+    this.rtcConfig = opts.rtc ?? { iceServers: [] };
+    this.reachable = new Promise((resolve) => (this.resolveReachable = resolve));
+    window.setTimeout(() => this.resolveReachable(false), REACHABLE_TIMEOUT_MS);
     this.join();
-    for (const socket of this.relaySockets()) socket.addEventListener('open', () => this.emitStatus());
-    this.checkRelays();
-    this.checkTimer = window.setInterval(() => this.checkRelays(), RELAY_CHECK_INTERVAL_MS);
+    // Probe each relay as it opens, then every so often.
+    for (const socket of this.relaySockets()) {
+      if (socket.readyState === WebSocket.OPEN) void this.probe(socket);
+      else {
+        socket.addEventListener('open', () => {
+          this.emitStatus();
+          void this.probe(socket);
+        });
+      }
+    }
+    this.schedule();
     doc.on('update', this.onUpdate);
   }
 
+  // Trystero's active peers, the ones a send reaches. `peerIds` is what we
+  // saw join and not leave, which can differ: see checkPeers.
   get peers(): string[] {
-    return [...this.peerIds];
+    return Object.keys(this.room.getPeers());
+  }
+
+  // One line per Trystero peer connection that has a remote, then a summary
+  // of every connection it holds, pool included, for diagnostics.
+  async describeConnections(): Promise<string[]> {
+    const out: string[] = [];
+    const states = new Map<string, number>();
+    const local = new Map<string, number>();
+    let withRelay = 0;
+    // close() fires no event, so drop closed ones here.
+    for (const pc of this.pcs) if (pc.connectionState === 'closed') this.pcs.delete(pc);
+    for (const pc of this.pcs) {
+      const key = `${pc.signalingState}/${pc.iceGatheringState}/${pc.iceConnectionState}`;
+      states.set(key, (states.get(key) ?? 0) + 1);
+      const stats = await pc.getStats();
+      let relay = false;
+      stats.forEach((report: Record<string, unknown>) => {
+        if (report.type !== 'local-candidate') return;
+        const type = String(report.candidateType);
+        local.set(type, (local.get(type) ?? 0) + 1);
+        if (type === 'relay') relay = true;
+      });
+      if (relay) withRelay++;
+    }
+    out.push(
+      `pool ${this.pcs.size} connections, ${withRelay} with a relay candidate, local candidates ${[...local].map(([t, n]) => `${t}:${n}`).join(',') || 'none'}, states ${[...states].map(([k, n]) => `${k}:${n}`).join(' ')}`,
+    );
+    for (const [id, pc] of Object.entries(this.room.getPeers())) {
+      const stats = await pc.getStats();
+      const byId = new Map<string, Record<string, unknown>>();
+      stats.forEach((report: Record<string, unknown>) => byId.set(String(report.id), report));
+      const pairs: string[] = [];
+      const local = new Map<string, number>();
+      stats.forEach((report: Record<string, unknown>) => {
+        if (report.type === 'local-candidate') {
+          const type = String(report.candidateType);
+          local.set(type, (local.get(type) ?? 0) + 1);
+        }
+        if (report.type !== 'candidate-pair') return;
+        const l = byId.get(String(report.localCandidateId));
+        const r = byId.get(String(report.remoteCandidateId));
+        pairs.push(`${String(l?.candidateType)}>${String(r?.candidateType)}=${String(report.state)}${report.nominated ? '*' : ''}`);
+      });
+      out.push(
+        `peer ${id.slice(0, 6)} ice=${pc.iceConnectionState} conn=${pc.connectionState} local=${[...local].map(([t, n]) => `${t}:${n}`).join(',')} pairs=${pairs.join(' ')}`,
+      );
+    }
+    return out;
+  }
+
+  // 'direct' or 'relay' per connected peer, from the selected candidate pair.
+  async paths(): Promise<string[]> {
+    const out: string[] = [];
+    for (const pc of Object.values(this.room.getPeers())) {
+      const stats = await pc.getStats();
+      const byId = new Map<string, Record<string, unknown>>();
+      stats.forEach((report: Record<string, unknown>) => byId.set(String(report.id), report));
+      let path = 'connecting';
+      stats.forEach((report: Record<string, unknown>) => {
+        if (report.type !== 'candidate-pair' || report.state !== 'succeeded' || !report.nominated) return;
+        const local = byId.get(String(report.localCandidateId));
+        const remote = byId.get(String(report.remoteCandidateId));
+        path = local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'relay' : 'direct';
+      });
+      out.push(path);
+    }
+    return out;
   }
 
   status(): Status {
     const relays = this.relaySockets().filter((socket) => socket.readyState === WebSocket.OPEN).length;
-    return { relays, peerFound: this.peerFound, iceFailed: this.iceFailed };
+    return { relays, attempts: this.attempts, failures: this.failures };
   }
 
   // Relay sockets outlive rooms and can look open while dead, for example
@@ -83,49 +175,122 @@ export class Provider {
   // with a subscription a live relay answers at once. Close any that stays
   // silent so Trystero reconnects it, then rejoin, because only a fresh
   // join announces at once.
+  // Closing a dead socket makes Trystero reconnect it. Only a fresh join
+  // announces at once, but rejoining drops every peer, so that happens
+  // only while there is nobody to lose.
   checkRelays(): void {
-    const silent = new Set(this.relaySockets().filter((socket) => socket.readyState === WebSocket.OPEN));
-    const probe = `probe-${Math.random().toString(36).slice(2)}`;
-    for (const socket of silent) {
-      const onMessage = (e: MessageEvent) => {
-        if (!String(e.data).includes(probe)) return;
-        silent.delete(socket);
-        socket.removeEventListener('message', onMessage);
-      };
-      socket.addEventListener('message', onMessage);
-      window.setTimeout(() => socket.removeEventListener('message', onMessage), RELAY_PROBE_MS);
-      socket.send(JSON.stringify(['REQ', probe, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [probe] }]));
-    }
-    window.setTimeout(() => {
-      const dead = [...silent].filter((socket) => socket.readyState === WebSocket.OPEN);
+    const open = this.relaySockets().filter((socket) => socket.readyState === WebSocket.OPEN);
+    void Promise.all(open.map((socket) => this.probe(socket))).then((alive) => {
+      const dead = open.filter((socket, i) => !alive[i] && socket.readyState === WebSocket.OPEN);
       for (const socket of dead) socket.close();
-      for (const socket of this.relaySockets()) {
-        if (!dead.includes(socket) && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(['CLOSE', probe]));
-      }
-      if (dead.length && !this.destroyed) void this.rejoin();
+      if (dead.length && !this.destroyed && !this.peers.length) void this.rejoin();
       else this.emitStatus();
-    }, RELAY_PROBE_MS);
+    });
+  }
+
+  // The periodic upkeep, sooner while alone. Alone with nothing in
+  // progress, a rejoin costs nothing and announces again, which covers an
+  // announce a relay lost or a handshake that missed: Trystero's own next
+  // announce is a minute away.
+  private schedule() {
+    this.checkTimer = window.setTimeout(() => void this.tick(), this.peers.length ? RELAY_CHECK_INTERVAL_MS : ALONE_INTERVAL_MS);
+  }
+
+  private async tick(): Promise<void> {
+    if (this.destroyed) return;
+    const { attempts } = this.status();
+    const idle = !this.peers.length && !this.peerIds.size && attempts === this.attemptsAtLastTick;
+    this.attemptsAtLastTick = attempts;
+    if (idle) await this.rejoin();
+    else {
+      this.checkRelays();
+      await this.checkPeers();
+    }
+    if (!this.destroyed) this.schedule();
+  }
+
+  // When Trystero replaces a peer's connection it drops the old one without
+  // a leave event, and if the new one never completes, that side keeps
+  // believing it is connected and ignores the peer's announces. A peer we
+  // saw join that Trystero no longer lists is that state, as is a listed
+  // peer that stops answering pings. Rejoining renegotiates everything.
+  async checkPeers(): Promise<void> {
+    if (this.destroyed || !this.peerIds.size) return;
+    const active = new Set(this.peers);
+    if ([...this.peerIds].some((id) => !active.has(id))) {
+      console.warn('collab: a peer vanished without leaving, rejoining');
+      this.peerIds.clear();
+      this.onPeers?.(0);
+      await this.rejoin();
+      return;
+    }
+    const ping = (id: string) => {
+      try {
+        return this.room.ping(id).then(() => true, () => false);
+      } catch {
+        // Trystero throws synchronously when it no longer knows the peer.
+        return Promise.resolve(false);
+      }
+    };
+    const answers = await Promise.all(
+      this.peers.map((id) =>
+        Promise.race([ping(id), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), PEER_PING_TIMEOUT_MS))]),
+      ),
+    );
+    if (this.destroyed || answers.every(Boolean)) return;
+    console.warn('collab: a peer stopped answering, rejoining');
+    await this.rejoin();
+  }
+
+  // Whether the relay behind an open socket says anything after a
+  // subscription. Relays answer in different ways; a dead one is silent.
+  private probe(socket: WebSocket): Promise<boolean> {
+    const id = `probe-${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const done = (ok: boolean) => {
+        window.clearTimeout(timer);
+        socket.removeEventListener('message', onMessage);
+        if (ok) {
+          this.resolveReachable(true);
+          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(['CLOSE', id]));
+        }
+        resolve(ok);
+      };
+      const onMessage = () => done(true);
+      const timer = window.setTimeout(() => done(false), RELAY_PROBE_MS);
+      socket.addEventListener('message', onMessage);
+      socket.send(JSON.stringify(['REQ', id, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [id] }]));
+    });
   }
 
   async destroy(): Promise<void> {
     this.destroyed = true;
-    window.clearInterval(this.checkTimer);
+    window.clearTimeout(this.checkTimer);
     this.doc.off('update', this.onUpdate);
-    await this.room.leave();
+    await this.room.leave().catch(() => {});
   }
 
   private join() {
-    // Trystero keeps a pool of idle connections, so only ICE moving past
-    // 'new' means a real peer answered.
-    const onIce = (state: RTCIceConnectionState) => {
-      if (state !== 'new') this.peerFound = true;
-      if (state === 'failed') this.iceFailed = true;
+    // WebKit can go straight from 'new' to 'connected', so the first state
+    // past 'new' is the attempt, counted once per connection.
+    const onIce = (pc: RTCPeerConnection, state: RTCIceConnectionState) => {
+      if (state !== 'new' && state !== 'closed' && !attempted.has(pc)) {
+        attempted.add(pc);
+        this.attempts++;
+      }
+      if (state === 'failed') this.failures++;
       this.emitStatus();
     };
+    const attempted = new WeakSet<RTCPeerConnection>();
+    const pcs = this.pcs;
     class ObservedPeerConnection extends RTCPeerConnection {
       constructor(config?: RTCConfiguration) {
         super(config);
-        this.addEventListener('iceconnectionstatechange', () => onIce(this.iceConnectionState));
+        pcs.add(this);
+        this.addEventListener('connectionstatechange', () => {
+          if (this.connectionState === 'closed') pcs.delete(this);
+        });
+        this.addEventListener('iceconnectionstatechange', () => onIce(this, this.iceConnectionState));
       }
     }
     this.room = joinRoom(
@@ -154,7 +319,10 @@ export class Provider {
   }
 
   private async rejoin() {
-    await this.room.leave();
+    this.peerIds.clear();
+    // Trystero's leave can reject on a channel that already closed
+    // (dmotz/trystero#195). The room is gone either way.
+    await this.room.leave().catch(() => {});
     // An announce sent while a socket is still reconnecting is deferred a minute.
     for (let i = 0; i < 80 && this.status().relays < this.opts.relays.length; i++) {
       await new Promise((resolve) => window.setTimeout(resolve, 100));
@@ -173,16 +341,22 @@ export class Provider {
     this.onStatus?.(this.status());
   }
 
+  // Every update goes to every peer, including ones received from a peer,
+  // which then skip their sender. Peers are meant to form a full mesh, but
+  // when a link is missing this keeps everyone in sync. Yjs ignores
+  // updates it already has, so the duplicates cost only bytes.
   private onUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin === this || this.peerIds.size === 0) return;
+    const from = origin instanceof Received && origin.provider === this ? origin.from : null;
+    const targets = this.peers.filter((id) => id !== from);
+    if (!targets.length) return;
     const encoder = encoding.createEncoder();
     syncProtocol.writeUpdate(encoder, update);
-    this.send(encoder);
+    void this.sync.send(encoding.toUint8Array(encoder), { target: targets });
   };
 
   private receive(data: Uint8Array, peerId: string) {
     const encoder = encoding.createEncoder();
-    const type = syncProtocol.readSyncMessage(decoding.createDecoder(data), encoder, this.doc, this);
+    const type = syncProtocol.readSyncMessage(decoding.createDecoder(data), encoder, this.doc, new Received(this, peerId));
     if (encoding.length(encoder) > 0) this.send(encoder, peerId);
     if (type === syncProtocol.messageYjsSyncStep2 && !this.synced) {
       this.synced = true;
@@ -193,6 +367,14 @@ export class Provider {
   private send(encoder: encoding.Encoder, target?: string) {
     void this.sync.send(encoding.toUint8Array(encoder), target ? { target } : undefined);
   }
+}
+
+// The origin of updates applied from a peer.
+class Received {
+  constructor(
+    readonly provider: Provider,
+    readonly from: string,
+  ) {}
 }
 
 function toBytes(data: unknown): Uint8Array {

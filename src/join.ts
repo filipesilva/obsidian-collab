@@ -1,4 +1,4 @@
-import { App, Modal, Setting, TFile, normalizePath } from 'obsidian';
+import { App, Modal, Notice, Setting, TFile, normalizePath } from 'obsidian';
 import type { Invite } from './invite';
 
 export class ConfirmJoin extends Modal {
@@ -82,6 +82,35 @@ export class Confirm extends Modal {
   onClose() {
     this.contentEl.empty();
     this.resolve(this.ok);
+  }
+}
+
+// Shows gathered diagnostics in a box, with a copy button.
+export class ShowText extends Modal {
+  constructor(
+    app: App,
+    private title: string,
+    private text: string,
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: this.title });
+    const box = contentEl.createEl('textarea', { text: this.text, cls: 'collab-text-box' });
+    box.readOnly = true;
+    box.rows = 20;
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText('Copy')
+        .setCta()
+        .onClick(() => void navigator.clipboard.writeText(this.text).then(() => new Notice('Collab: copied'))),
+    );
+  }
+
+  onClose() {
+    this.contentEl.empty();
   }
 }
 

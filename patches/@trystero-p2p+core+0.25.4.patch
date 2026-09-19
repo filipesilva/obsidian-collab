@@ -1,0 +1,13 @@
+diff --git a/node_modules/@trystero-p2p/core/dist/offer-pool.mjs b/node_modules/@trystero-p2p/core/dist/offer-pool.mjs
+index 7340a4f..b5b6ead 100644
+--- a/node_modules/@trystero-p2p/core/dist/offer-pool.mjs
++++ b/node_modules/@trystero-p2p/core/dist/offer-pool.mjs
+@@ -2,7 +2,7 @@ import { all, alloc, noOp, resetTimer } from "./utils.mjs";
+ //#region src/offer-pool.ts
+ const offerTtl = 57333;
+ const offerLeaseTtlMs = 18e4;
+-const poolSize = 20;
++const poolSize = 3;
+ var OfferPool = class {
+ 	makeOffer;
+ 	pool = [];
