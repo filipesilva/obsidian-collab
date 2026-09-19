@@ -1,15 +1,13 @@
 # obsidian-collab worker
 
-Signaling and TURN credentials for the plugin. One Durable Object per room
-forwards opaque y-webrtc signaling messages between the peers in it. Every
-message is encrypted by the plugin with the session secret before it gets
-here, so this server never sees connection details or document content and
-never stores anything.
+A signalling server for the plugin: the smallest Nostr relay that Trystero
+needs. It forwards live events between the peers subscribed to a room and
+stores nothing. Every message is encrypted by the plugin with the room
+secret before it gets here, so this server never sees connection details or
+document content.
 
-Routes:
-
-- `wss://<host>/room/<id>`: signaling websocket for one room.
-- `https://<host>/ice`: ICE server list. STUN only, unless TURN secrets are set.
+You do not need one. The plugin ships with public Nostr relays. Run your own
+when you want signalling under your control, or for offline use on a LAN.
 
 ## Run locally
 
@@ -18,8 +16,12 @@ npm install
 npm run dev
 ```
 
-Point the plugin at `ws://localhost:8787`, or at `ws://<lan ip>:8787` with
-`npm run dev -- --ip 0.0.0.0` for a phone on the same network.
+Add `ws://localhost:8787` to the plugin's signalling servers, or
+`ws://<lan ip>:8787` with `npm run dev -- --ip 0.0.0.0` for a phone on the
+same network. Replace the list with just that URL to keep a room fully
+local.
+
+The plugin's tests start this Worker themselves on port 8788.
 
 ## Deploy your own
 
@@ -28,27 +30,27 @@ npx wrangler login
 npm run deploy
 ```
 
-Then set the plugin's server to `wss://<worker host>`.
+No domain is needed. The Worker gets a free `workers.dev` address, and the
+first deploy asks you to pick the subdomain. Add
+`wss://obsidian-collab.<subdomain>.workers.dev` to the plugin's signalling
+servers. The `name` in `wrangler.jsonc` is the first label of that host.
 
-TURN is optional. Without it, peers behind strict NATs may fail to connect.
-Create a TURN key in the Cloudflare dashboard under Realtime, then:
+## Keep it private
+
+Anyone who knows the URL can use the relay, for any Trystero app. To limit it
+to people you invite, set a token:
 
 ```
-npx wrangler secret put TURN_KEY_ID
-npx wrangler secret put TURN_API_TOKEN
+npx wrangler secret put RELAY_TOKEN
 ```
 
-`/ice` then returns short-lived TURN credentials, cached for an hour.
+Then the relay only accepts `wss://<host>/<token>`. Use that full URL in the
+signalling servers. Invite links carry it to guests, so share links only
+with people who should have it.
 
 ## Cost
 
-Signaling runs within the Workers Free plan: 100,000 requests a day, and
-the Durable Object hibernates between messages, so idle rooms cost nothing.
-Past the daily limit new connections fail until midnight UTC and nothing is
-billed. Staying on the Free plan is the cap.
-
-TURN is part of Cloudflare Realtime, which asks for a payment method even
-though the first 1,000 GB a month are free and a session moves kilobytes.
-There is no hard cap on it. Set a budget alert at a low value in the billing
-dashboard; it emails a day late but is the only signal. Deleting the TURN key
-invalidates every outstanding credential at once.
+Runs within the Workers Free plan: 100,000 requests a day, and the Durable
+Object hibernates between messages, so idle rooms cost nothing. Past the
+daily limit new connections fail until midnight UTC and nothing is billed.
+Staying on the Free plan is the cap.

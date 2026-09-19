@@ -2,7 +2,7 @@
   "id": "obsidian-collab",
   "name": "Collab",
   "version": "0.0.1",
-  "minAppVersion": "1.0.0",
+  "minAppVersion": "1.7.2",
   "description": "Peer-to-peer collaborative editing sessions on notes. Yjs over WebRTC, no server ever holds document data.",
   "author": "Filipe Silva",
   "authorUrl": "https://github.com/filipesilva",

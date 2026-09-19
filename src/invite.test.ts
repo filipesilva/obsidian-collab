@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { inviteLink, parseInvite, randomId } from './invite';
+import { inviteLink, parseInvite, parseInviteLink, randomId } from './invite';
 
 describe('invite link', () => {
   const invite = {
-    server: 'wss://collab.example.com',
+    relays: ['wss://relay.example.com', 'wss://a,b.example.com/x y'],
     room: 'r-1',
     secret: 'k/1+2=',
     doc: 'doc-1',
@@ -26,6 +26,13 @@ describe('invite link', () => {
     expect(link.startsWith('obsidian://collab?')).toBe(true);
     expect(link).not.toContain('+');
     expect(parseInvite({ action: 'collab', ...obsidianParams(link) })).toEqual(invite);
+  });
+
+  it('parses a pasted link', () => {
+    expect(parseInviteLink(` ${inviteLink(invite)}\n`)).toEqual(invite);
+    expect(parseInviteLink('https://example.com/?s=x&r=y&k=z&d=w')).toBeNull();
+    expect(parseInviteLink('obsidian://collab')).toBeNull();
+    expect(parseInviteLink('obsidian://collab?s=%E0%A4%A&r=y&k=z&d=w')).toBeNull();
   });
 
   it('rejects links missing a required field', () => {

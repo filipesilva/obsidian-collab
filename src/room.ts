@@ -1,41 +1,49 @@
-import { App, Notice, TFile, requestUrl } from 'obsidian';
+import { App, Notice, TFile } from 'obsidian';
 import * as Y from 'yjs';
-import type { WebrtcProvider } from 'y-webrtc';
-import { STUN, createProvider, iceUrl } from './network';
+import { Provider, type Status } from './network';
 import { SharedDoc } from './shared-doc';
 import { getText, observeDocs, openDoc } from './sync';
 
-export interface SessionInfo {
-  server: string;
+export interface RoomInfo {
   room: string;
   secret: string;
+  relays: string[];
 }
 
 // One Y.Doc, one WebRTC room, any number of shared notes keyed by path.
-export class Session {
+export class Room {
   readonly ydoc = new Y.Doc();
   readonly docs = new Map<string, SharedDoc>();
-  provider: WebrtcProvider | null = null;
+  provider: Provider | null = null;
   private unobserve: () => void;
 
   constructor(
     private app: App,
-    readonly info: SessionInfo,
+    readonly info: RoomInfo,
+    private iceServers: RTCIceServer[],
   ) {
     this.unobserve = observeDocs(this.ydoc, (id) => this.adoptReplaced(id));
   }
 
-  async connect(): Promise<void> {
-    this.provider = createProvider(this.ydoc, { ...this.info, iceServers: await fetchIceServers(this.info.server) });
-    this.provider.on('peers', ({ webrtcPeers }) => {
-      new Notice(`Collab: ${webrtcPeers.length} ${webrtcPeers.length === 1 ? 'peer' : 'peers'} connected`);
-    });
+  connect(onStatus?: (status: Status) => void): void {
+    this.provider = new Provider(this.ydoc, { ...this.info, iceServers: this.iceServers });
+    this.provider.onStatus = onStatus ?? null;
+    this.provider.onPeers = (count) => {
+      new Notice(`Collab: ${count} ${count === 1 ? 'peer' : 'peers'} connected`);
+    };
+    // Relay sockets outlive rooms, so some may be open already.
+    onStatus?.(this.provider.status());
+  }
+
+  status(): Status {
+    return this.provider?.status() ?? { relays: 0, peerFound: false, iceFailed: false };
   }
 
   // Resolves true at the first sync with a peer, false on timeout.
   synced(timeout: number): Promise<boolean> {
     return new Promise((resolve) => {
-      this.provider?.once('synced', () => resolve(true));
+      if (this.provider?.synced) return resolve(true);
+      if (this.provider) this.provider.onSynced = () => resolve(true);
       window.setTimeout(() => resolve(false), timeout);
     });
   }
@@ -44,7 +52,7 @@ export class Session {
     return getText(this.ydoc, id) !== undefined;
   }
 
-  // Adopts the doc if the session already has it, seeds it from the note otherwise.
+  // Adopts the doc if the room already has it, seeds it from the note otherwise.
   async share(file: TFile, id: string = crypto.randomUUID()): Promise<SharedDoc> {
     const existing = getText(this.ydoc, id);
     const doc = existing
@@ -79,13 +87,11 @@ export class Session {
     for (const doc of this.docs.values()) doc.rebind();
   }
 
-  end(): void {
+  leave(): void {
     for (const doc of this.docs.values()) doc.destroy();
     this.docs.clear();
     this.unobserve();
-    // destroy() alone leaves the signaling socket open.
-    this.provider?.disconnect();
-    this.provider?.destroy();
+    void this.provider?.destroy();
     this.ydoc.destroy();
   }
 
@@ -97,15 +103,4 @@ export class Session {
     doc.destroy();
     this.docs.set(doc.file.path, new SharedDoc(this.app, doc.file, id, ytext, true));
   }
-}
-
-async function fetchIceServers(server: string): Promise<RTCIceServer[]> {
-  try {
-    const res = await requestUrl({ url: iceUrl(server) });
-    const { iceServers } = res.json as { iceServers?: RTCIceServer[] };
-    if (iceServers?.length) return iceServers;
-  } catch (e) {
-    console.warn('collab: /ice unavailable, using STUN only', e);
-  }
-  return STUN;
 }

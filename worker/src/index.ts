@@ -1,105 +1,99 @@
-// Signaling for obsidian-collab. One Durable Object per room forwards opaque
-// messages between the peers in it, using the y-webrtc signaling protocol.
-// It never sees document content: y-webrtc encrypts every message with the
-// session secret before it reaches this server.
+// Signalling for obsidian-collab: a minimal Nostr relay for Trystero. EVENT
+// fans out to every REQ whose filter matches, nothing is stored, signatures
+// are not checked. It never sees connection details or document content:
+// the plugin encrypts every message with the session secret before it
+// reaches this server.
 
 export interface Env {
-  ROOMS: DurableObjectNamespace;
-  TURN_KEY_ID?: string;
-  TURN_API_TOKEN?: string;
+  RELAY: DurableObjectNamespace;
+  RELAY_TOKEN?: string;
 }
 
-const STUN = { urls: ['stun:stun.cloudflare.com:3478'] };
-const TURN_TTL = 7200;
-
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const room = /^\/room\/([^/]+)$/.exec(url.pathname);
-    if (room) {
-      if (request.headers.get('Upgrade') !== 'websocket') {
-        return new Response('expected a websocket', { status: 426 });
-      }
-      return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);
+  fetch(request: Request, env: Env): Response | Promise<Response> {
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('obsidian-collab signalling server', { status: 200 });
     }
-    if (url.pathname === '/ice') return ice(env);
-    return new Response('obsidian-collab signaling server', { status: 200 });
+    if (env.RELAY_TOKEN && new URL(request.url).pathname !== `/${env.RELAY_TOKEN}`) {
+      return new Response('unauthorized', { status: 401 });
+    }
+    // One object serves every room because clients connect before saying
+    // which topics they want.
+    return env.RELAY.get(env.RELAY.idFromName('relay')).fetch(request);
   },
 };
 
-let iceCache: { body: string; expires: number } | null = null;
-
-async function ice(env: Env): Promise<Response> {
-  const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-  if (!env.TURN_KEY_ID || !env.TURN_API_TOKEN) {
-    return new Response(JSON.stringify({ iceServers: [STUN] }), { headers });
-  }
-  if (!iceCache || iceCache.expires < Date.now()) {
-    const res = await fetch(
-      `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${env.TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ttl: TURN_TTL }),
-      },
-    );
-    if (!res.ok) return new Response(JSON.stringify({ iceServers: [STUN] }), { headers });
-    // Cloudflare returns the STUN entry alongside the TURN one.
-    iceCache = { body: await res.text(), expires: Date.now() + (TURN_TTL / 2) * 1000 };
-  }
-  return new Response(iceCache.body, { headers });
+interface NostrEvent {
+  id: string;
+  kind: number;
+  tags: string[][];
+  content: string;
 }
 
-interface Message {
-  type: string;
-  topic?: string;
-  topics?: string[];
-  clients?: number;
+interface Filter {
+  kinds?: number[];
+  [tag: `#${string}`]: string[] | undefined;
 }
 
-export class Room implements DurableObject {
-  constructor(private state: DurableObjectState) {
-    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'));
+type Subscriptions = Record<string, Filter[]>;
+
+function matches(filter: Filter, event: NostrEvent): boolean {
+  if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
+  for (const [key, values] of Object.entries(filter)) {
+    if (!key.startsWith('#') || !Array.isArray(values)) continue;
+    const name = key.slice(1);
+    if (!event.tags.some((tag) => tag[0] === name && values.includes(tag[1] ?? ''))) return false;
   }
+  return true;
+}
+
+export class Relay implements DurableObject {
+  constructor(private state: DurableObjectState) {}
 
   fetch(): Response {
     const { 0: client, 1: server } = new WebSocketPair();
     this.state.acceptWebSocket(server);
-    server.serializeAttachment([]);
+    server.serializeAttachment({});
     return new Response(null, { status: 101, webSocket: client });
   }
 
   webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): void {
     if (typeof raw !== 'string') return;
-    let message: Message;
+    let message: unknown;
     try {
-      message = JSON.parse(raw) as Message;
+      message = JSON.parse(raw);
     } catch {
       return;
     }
-    const topics = new Set(ws.deserializeAttachment() as string[]);
-    switch (message.type) {
-      case 'subscribe':
-        for (const topic of message.topics ?? []) topics.add(topic);
-        ws.serializeAttachment([...topics]);
-        break;
-      case 'unsubscribe':
-        for (const topic of message.topics ?? []) topics.delete(topic);
-        ws.serializeAttachment([...topics]);
-        break;
-      case 'publish': {
-        if (!message.topic) return;
-        const receivers = this.state
-          .getWebSockets()
-          .filter((peer) => (peer.deserializeAttachment() as string[]).includes(message.topic!));
-        message.clients = receivers.length;
-        const out = JSON.stringify(message);
-        for (const peer of receivers) peer.send(out);
+    if (!Array.isArray(message)) return;
+    const subs = ws.deserializeAttachment() as Subscriptions;
+    const [type, arg, ...rest] = message as unknown[];
+    switch (type) {
+      case 'REQ': {
+        if (typeof arg !== 'string') return;
+        subs[arg] = rest.filter((f): f is Filter => typeof f === 'object' && f !== null);
+        ws.serializeAttachment(subs);
+        ws.send(JSON.stringify(['EOSE', arg]));
         break;
       }
-      case 'ping':
-        ws.send('{"type":"pong"}');
+      case 'CLOSE': {
+        if (typeof arg !== 'string') return;
+        delete subs[arg];
+        ws.serializeAttachment(subs);
         break;
+      }
+      case 'EVENT': {
+        const event = arg as NostrEvent | undefined;
+        if (!event || typeof event.id !== 'string' || !Array.isArray(event.tags)) return;
+        ws.send(JSON.stringify(['OK', event.id, true, '']));
+        for (const peer of this.state.getWebSockets()) {
+          const peerSubs = peer.deserializeAttachment() as Subscriptions;
+          for (const [subId, filters] of Object.entries(peerSubs)) {
+            if (filters.some((f) => matches(f, event))) peer.send(JSON.stringify(['EVENT', subId, event]));
+          }
+        }
+        break;
+      }
     }
   }
 

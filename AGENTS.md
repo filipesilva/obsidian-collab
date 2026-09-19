@@ -79,18 +79,18 @@ npm run build
 
 ## Testing
 
-- Unit tests: `npm test` runs vitest in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once.
+- Unit tests: `npm test` runs vitest in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once. Tests boot the signalling Worker themselves on port 8788, so they run offline. `npm run test-online` also runs the test that goes through public Nostr relays.
+- Trystero fixes one peer id per page, so tests that need a second peer load `src/test/peer.ts` in an iframe and talk to it with postMessage.
 - Dev vaults: `~/repos/sandbox/obsidian-collab-a` and `-b`. Each has this repo symlinked as `.obsidian/plugins/obsidian-collab`, so `npm run build` is picked up on the next reload.
-- Signaling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Set the plugin's server setting to `ws://localhost:8787` or `ws://<lan ip>:8787`. Source and deploy notes in `worker/`.
+- Signalling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Put `ws://localhost:8787` or `ws://<lan ip>:8787` in the plugin's signalling servers, alone, to keep sessions local. Source and deploy notes in `worker/`.
 - Drive Obsidian from the terminal with the CLI. `vault=` must come **before** the command, otherwise it is ignored and the command hits whichever window was focused last:
     ```
     obsidian vault=obsidian-collab-a plugin:reload id=obsidian-collab
-    obsidian vault=obsidian-collab-a eval code="app.commands.executeCommandById('obsidian-collab:hello')"
+    obsidian vault=obsidian-collab-a eval code="app.commands.executeCommandById('obsidian-collab:start-room')"
     obsidian dev:errors
     obsidian dev:debug on && obsidian dev:console level=error
     ```
-- `CHECKLIST.md` lists the Obsidian-side checks to run after changes to editor binding or sessions.
-- Two vaults in one Obsidian process share an origin. y-webrtc would link them over BroadcastChannel, so `createProvider` sets `filterBcConns: false` to force WebRTC.
+- `CHECKLIST.md` lists the Obsidian-side checks to run after changes to editor binding or rooms.
 
 ## Commands & settings
 

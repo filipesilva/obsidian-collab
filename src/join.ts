@@ -19,9 +19,9 @@ export class ConfirmJoin extends Modal {
 
   onOpen() {
     const { contentEl, invite } = this;
-    contentEl.createEl('h2', { text: 'Join collab session' });
+    contentEl.createEl('h2', { text: 'Join collab room' });
     contentEl.createEl('p', {
-      text: `Someone shared "${invite.note}" through ${invite.server}. Your edits go directly to the other peers over WebRTC. That server only relays connection setup and cannot read the note.`,
+      text: `Someone shared "${invite.note}". Your edits go directly to the other peers over WebRTC. Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the note.`,
     });
     new Setting(contentEl)
       .addButton((b) =>
@@ -39,6 +39,42 @@ export class ConfirmJoin extends Modal {
   onClose() {
     this.contentEl.empty();
     this.resolve(this.ok);
+  }
+}
+
+// Asks for a pasted invite link. Undefined when dismissed.
+export class AskLink extends Modal {
+  private link: string | undefined;
+  private resolve!: (link: string | undefined) => void;
+
+  ask(): Promise<string | undefined> {
+    this.open();
+    return new Promise((resolve) => (this.resolve = resolve));
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: 'Join collab room' });
+    let value = '';
+    const submit = () => {
+      this.link = value;
+      this.close();
+    };
+    new Setting(contentEl).setName('Invite link').addText((text) => {
+      text.onChange((v) => (value = v));
+      text.inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submit();
+      });
+      window.setTimeout(() => text.inputEl.focus());
+    });
+    new Setting(contentEl)
+      .addButton((b) => b.setButtonText('Join').setCta().onClick(submit))
+      .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    this.resolve(this.link);
   }
 }
 
@@ -80,8 +116,9 @@ export class PickNote extends FuzzySuggestModal<TFile | null> {
 
 export async function createNote(app: App, name: string): Promise<TFile> {
   const base = name || 'Shared note';
+  // The adapter check is case-insensitive where the file system is.
   for (let n = 0; ; n++) {
     const path = normalizePath(`${base}${n ? ` ${n}` : ''}.md`);
-    if (!app.vault.getAbstractFileByPath(path)) return app.vault.create(path, '');
+    if (!(await app.vault.adapter.exists(path))) return app.vault.create(path, '');
   }
 }

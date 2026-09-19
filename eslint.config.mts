@@ -7,6 +7,7 @@ export default defineConfig(
     'node_modules',
     'dist',
     'worker',
+    'test',
     'esbuild.config.mjs',
     'version-bump.mjs',
     'versions.json',
@@ -33,6 +34,15 @@ export default defineConfig(
   {
     rules: {
       '@typescript-eslint/no-base-to-string': ['error', { ignoredTypeNames: ['YText'] }],
+      'obsidianmd/ui/sentence-case': ['warn', { acronyms: ['TURN', 'STUN'] }],
+    },
+  },
+  {
+    // Tests run in a plain browser without Obsidian's DOM helpers.
+    files: ['src/**/*.test.ts', 'src/test/**/*.ts'],
+    rules: {
+      'obsidianmd/prefer-create-el': 'off',
+      'obsidianmd/prefer-window-timers': 'off',
     },
   },
 );

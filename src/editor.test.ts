@@ -28,7 +28,8 @@ function text(content: string): Y.Text {
 function paneSync(a: EditorView, b: EditorView) {
   const forward = (to: EditorView) =>
     EditorView.updateListener.of((update) => {
-      if (update.docChanged) to.dispatch({ changes: update.changes, userEvent: 'set' });
+      if (!update.docChanged || update.transactions.some((tr) => tr.isUserEvent('set'))) return;
+      to.dispatch({ changes: update.changes, userEvent: 'set' });
     });
   const link = (from: EditorView, to: EditorView) =>
     from.setState(
