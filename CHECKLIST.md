@@ -1,8 +1,8 @@
 # Manual checklist
 
-Run in a dev vault after changes to editor binding or rooms. Most steps can
+Run in a dev vault after changes to editor binding or collabs. Most steps can
 be driven from the CLI with `obsidian vault=<name> eval code=...`; the shared
-doc is at `app.plugins.plugins['obsidian-collab'].room.docs.get(path)`.
+doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values()][0].docs.get(path)`.
 
 - Share a note that is open in two panes. Type in each pane. Both panes and
   the Y.Text agree at once, disk follows within 3 s.
@@ -18,11 +18,32 @@ doc is at `app.plugins.plugins['obsidian-collab'].room.docs.get(path)`.
   without a focused editor.
 - Rename the shared note. It stays shared under the new path. Delete it. It
   is unshared.
-- Start a room in one vault, join from another with the copied link. Also
-  join with the **Join room from invite link** command and the pasted link.
-  The confirm modal names the relays, the picker offers a new note, the
-  new note gets the host's content, edits flow both ways, both sides show
-  a peer count. Leave the room on the host, the guest's peer count drops.
+- Share a file in one vault. It gets a `collab-url` property, the URL is on
+  the clipboard, and `state/<collab id>.yjs` appears in the plugin folder.
+- Join from another vault with the URL, by the protocol handler and by the
+  **Join URL** command. A new note is created with the property and opened,
+  the notice says it is waiting, and once the host is online the note takes
+  the shared text. Edits flow both ways, both sides show a peer count.
+  Disconnect on one side, the other's peer count drops.
+- Disconnect the guest, edit on both sides, **Connect file** on the guest's
+  note. Both edits are present on both sides.
+- Stop sharing on the guest. The property and the state file are gone, the
+  note stays.
+- Share a folder with nested notes from its context menu or with **Share
+  folder** on a note inside it. `collab.md` appears in it with the URL, and
+  every markdown file becomes a doc.
+- Join the folder URL from another vault. The folder is created at the same
+  path with `collab.md` and every note, nested ones included. A note created,
+  renamed, or deleted on either side appears, moves, or lands in the trash
+  on the other within seconds. Edits flow both ways.
+- Join a folder URL when a folder already exists at that path without the
+  marker. It is refused with a message.
+- Disconnect and **Connect folder** again. Everything binds without waiting.
+  Stop sharing the folder: `collab.md` and the state file are gone, the
+  notes stay.
+- The status bar shows how many collabs are connected. Clicking it lists
+  them with their peer counts, each disconnects on click, and **Disconnect
+  all** empties it. The command does the same.
 - Set the signalling servers to the local worker only. Start and join work
   with the worker running and nothing else reachable.
 - Reset a settings list. The defaults come back and the textarea shows them.

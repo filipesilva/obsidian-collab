@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, Modal, Setting, TFile, normalizePath } from 'obsidian';
+import { App, Modal, Setting, TFile, normalizePath } from 'obsidian';
 import type { Invite } from './invite';
 
 export class ConfirmJoin extends Modal {
@@ -19,9 +19,10 @@ export class ConfirmJoin extends Modal {
 
   onOpen() {
     const { contentEl, invite } = this;
-    contentEl.createEl('h2', { text: 'Join collab room' });
+    const what = invite.folder !== undefined ? `the folder "${invite.folder || '/'}"` : `the file "${invite.file}"`;
+    contentEl.createEl('h2', { text: 'Join shared ' + (invite.folder !== undefined ? 'folder' : 'file') });
     contentEl.createEl('p', {
-      text: `Someone shared "${invite.note}". Your edits go directly to the other peers over WebRTC. Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the note.`,
+      text: `Someone shared ${what}. Your edits go directly to the other peers over WebRTC. Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the content.`,
     });
     new Setting(contentEl)
       .addButton((b) =>
@@ -42,10 +43,52 @@ export class ConfirmJoin extends Modal {
   }
 }
 
-// Asks for a pasted invite link. Undefined when dismissed.
-export class AskLink extends Modal {
-  private link: string | undefined;
-  private resolve!: (link: string | undefined) => void;
+// A yes or no question. Resolves false when dismissed.
+export class Confirm extends Modal {
+  private ok = false;
+  private resolve!: (ok: boolean) => void;
+
+  constructor(
+    app: App,
+    private title: string,
+    private text: string,
+    private action: string,
+  ) {
+    super(app);
+  }
+
+  ask(): Promise<boolean> {
+    this.open();
+    return new Promise((resolve) => (this.resolve = resolve));
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h2', { text: this.title });
+    contentEl.createEl('p', { text: this.text });
+    new Setting(contentEl)
+      .addButton((b) =>
+        b
+          .setButtonText(this.action)
+          .setCta()
+          .onClick(() => {
+            this.ok = true;
+            this.close();
+          }),
+      )
+      .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    this.resolve(this.ok);
+  }
+}
+
+// Asks for a pasted invite URL. Undefined when dismissed.
+export class AskUrl extends Modal {
+  private url: string | undefined;
+  private resolve!: (url: string | undefined) => void;
 
   ask(): Promise<string | undefined> {
     this.open();
@@ -54,13 +97,13 @@ export class AskLink extends Modal {
 
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl('h2', { text: 'Join collab room' });
+    contentEl.createEl('h2', { text: 'Join URL' });
     let value = '';
     const submit = () => {
-      this.link = value;
+      this.url = value;
       this.close();
     };
-    new Setting(contentEl).setName('Invite link').addText((text) => {
+    new Setting(contentEl).setName('Collab URL').addText((text) => {
       text.onChange((v) => (value = v));
       text.inputEl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') submit();
@@ -74,43 +117,7 @@ export class AskLink extends Modal {
 
   onClose() {
     this.contentEl.empty();
-    this.resolve(this.link);
-  }
-}
-
-// Picks an existing note, or null for a new one. Undefined when dismissed.
-export class PickNote extends FuzzySuggestModal<TFile | null> {
-  private chosen: TFile | null | undefined;
-  private resolve!: (file: TFile | null | undefined) => void;
-
-  constructor(
-    app: App,
-    private noteName: string,
-  ) {
-    super(app);
-    this.setPlaceholder('Where should the shared note go?');
-  }
-
-  ask(): Promise<TFile | null | undefined> {
-    this.open();
-    return new Promise((resolve) => (this.resolve = resolve));
-  }
-
-  getItems(): (TFile | null)[] {
-    return [null, ...this.app.vault.getMarkdownFiles()];
-  }
-
-  getItemText(item: TFile | null): string {
-    return item ? item.path : `New note "${this.noteName}"`;
-  }
-
-  onChooseItem(item: TFile | null): void {
-    this.chosen = item;
-  }
-
-  // Obsidian closes the modal before it reports the choice.
-  onClose(): void {
-    queueMicrotask(() => this.resolve(this.chosen));
+    this.resolve(this.url);
   }
 }
 

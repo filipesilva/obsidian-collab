@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { inviteLink, parseInvite, parseInviteLink, randomId } from './invite';
+import { inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
 
-describe('invite link', () => {
+describe('invite url', () => {
   const invite = {
     relays: ['wss://relay.example.com', 'wss://a,b.example.com/x y'],
-    room: 'r-1',
+    id: 'c-1',
     secret: 'k/1+2=',
-    doc: 'doc-1',
-    note: 'My note & more',
+    file: 'My note & more',
   };
 
   // Obsidian splits on & and = and runs decodeURIComponent on each part.
@@ -22,26 +21,30 @@ describe('invite link', () => {
   }
 
   it('round trips through the obsidian protocol query', () => {
-    const link = inviteLink(invite);
-    expect(link.startsWith('obsidian://collab?')).toBe(true);
-    expect(link).not.toContain('+');
-    expect(parseInvite({ action: 'collab', ...obsidianParams(link) })).toEqual(invite);
+    const url = inviteUrl(invite);
+    expect(url.startsWith('obsidian://collab?')).toBe(true);
+    expect(url).not.toContain('+');
+    expect(parseInvite({ action: 'collab', ...obsidianParams(url) })).toEqual(invite);
   });
 
-  it('parses a pasted link', () => {
-    expect(parseInviteLink(` ${inviteLink(invite)}\n`)).toEqual(invite);
-    expect(parseInviteLink('https://example.com/?s=x&r=y&k=z&d=w')).toBeNull();
-    expect(parseInviteLink('obsidian://collab')).toBeNull();
-    expect(parseInviteLink('obsidian://collab?s=%E0%A4%A&r=y&k=z&d=w')).toBeNull();
+  it('round trips a folder url, including the vault root', () => {
+    const folder = { ...invite, file: undefined, folder: 'Collab/Plan' };
+    expect(parseInvite(obsidianParams(inviteUrl(folder)))).toEqual({ ...folder, file: undefined });
+    const root = { ...folder, folder: '' };
+    expect(parseInvite(obsidianParams(inviteUrl(root)))?.folder).toBe('');
   });
 
-  it('rejects links missing a required field', () => {
-    expect(parseInvite({ s: 'x', r: 'y', k: 'z' })).toBeNull();
-    expect(parseInvite({ s: 'x', r: 'y', d: 'w' })).toBeNull();
+  it('parses a pasted url', () => {
+    expect(parseInviteUrl(` ${inviteUrl(invite)}\n`)).toEqual(invite);
+    expect(parseInviteUrl('https://example.com/?s=x&i=y&k=z&f=w')).toBeNull();
+    expect(parseInviteUrl('obsidian://collab')).toBeNull();
+    expect(parseInviteUrl('obsidian://collab?s=%E0%A4%A&i=y&k=z&f=w')).toBeNull();
   });
 
-  it('defaults the note name to empty', () => {
-    expect(parseInvite({ s: 'x', r: 'y', k: 'z', d: 'w' })?.note).toBe('');
+  it('rejects urls missing a required field', () => {
+    expect(parseInvite({ s: 'x', i: 'y', k: 'z' })).toBeNull();
+    expect(parseInvite({ s: 'x', i: 'y', f: 'w' })).toBeNull();
+    expect(parseInvite({ s: 'x', i: 'y', k: 'z', f: '' })).toBeNull();
   });
 });
 

@@ -53,7 +53,7 @@ export class CollabSettingTab extends PluginSettingTab {
 
     this.list(
       'Signalling servers',
-      'Nostr relays where peers find each other, one per line. A room dials a few of them and the invite link tells guests which. They see your IP address and a room id, never the notes.',
+      'Nostr relays where peers find each other, one per line. A collab dials a few of them and its URL tells guests which. They see your IP address and a room id, never the notes.',
       'signalling',
       () => settings.relays,
       (value) => (settings.relays = value),

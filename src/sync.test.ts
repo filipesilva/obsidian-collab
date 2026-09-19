@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { applyContent, diffChanges, docs, getText, observeDocs, openDoc } from './sync';
+import { applyContent, diffChanges, docs, getText, observeDocs, observeEntries, openDoc } from './sync';
 
 // Two docs joined by a fake network. Connected docs forward updates live;
 // connect() also exchanges everything missed while apart.
@@ -192,5 +192,27 @@ describe('observeDocs', () => {
     await Promise.resolve();
     if (getText(b, note.id) === tb) return;
     expect(seen).toEqual([note.id]);
+  });
+});
+
+describe('observeEntries', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('reports adds, renames and deletes, never text edits', async () => {
+    const doc = new Y.Doc();
+    const seen: string[] = [];
+    const stop = observeEntries(doc, (id, change) => seen.push(`${change}:${id}`));
+    const text = openDoc(doc, { id: 'n', path: 'a.md', content: 'hi' });
+    await flush();
+    text.insert(2, '!');
+    await flush();
+    docs(doc).get('n')!.set('path', 'b.md');
+    await flush();
+    docs(doc).delete('n');
+    await flush();
+    stop();
+    openDoc(doc, { id: 'm', path: 'c.md', content: '' });
+    await flush();
+    expect(seen).toEqual(['add:n', 'update:n', 'delete:n']);
   });
 });

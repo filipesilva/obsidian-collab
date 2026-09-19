@@ -115,6 +115,18 @@ describe('Provider', () => {
     await syncWithPeer(LOCAL_RELAYS);
   });
 
+  it('leaves a healthy relay socket alone when checked', { timeout: 40000 }, async () => {
+    const sockets = getRelaySockets as () => Record<string, WebSocket>;
+    await syncWithPeer(LOCAL_RELAYS, async (provider) => {
+      const socket = sockets()[LOCAL_RELAYS[0]!]!;
+      while (socket.readyState !== WebSocket.OPEN) await new Promise((r) => setTimeout(r, 20));
+      provider.checkRelays();
+      await new Promise((r) => setTimeout(r, 4500));
+      expect(sockets()[LOCAL_RELAYS[0]!]).toBe(socket);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    });
+  });
+
   it('recovers from a relay socket that looks open but is dead', { timeout: 40000 }, async () => {
     // Trystero reuses the socket from the previous test. Make it swallow
     // everything, like a socket iOS cut while the app was in the background.

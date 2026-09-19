@@ -81,16 +81,16 @@ npm run build
 
 - Unit tests: `npm test` runs vitest in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once. Tests boot the signalling Worker themselves on port 8788, so they run offline. `npm run test-online` also runs the test that goes through public Nostr relays.
 - Trystero fixes one peer id per page, so tests that need a second peer load `src/test/peer.ts` in an iframe and talk to it with postMessage.
-- Dev vaults: `~/repos/sandbox/obsidian-collab-a` and `-b`. Each has this repo symlinked as `.obsidian/plugins/obsidian-collab`, so `npm run build` is picked up on the next reload.
+- Dev vaults: `~/repos/sandbox/obsidian-collab-a` and `-b`. Each has its own `.obsidian/plugins/obsidian-collab` folder with `main.js`, `manifest.json` and `styles.css` symlinked from this repo, so `npm run build` is picked up on the next reload while settings and collab state stay per vault.
 - Signalling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Put `ws://localhost:8787` or `ws://<lan ip>:8787` in the plugin's signalling servers, alone, to keep sessions local. Source and deploy notes in `worker/`.
 - Drive Obsidian from the terminal with the CLI. `vault=` must come **before** the command, otherwise it is ignored and the command hits whichever window was focused last:
     ```
     obsidian vault=obsidian-collab-a plugin:reload id=obsidian-collab
-    obsidian vault=obsidian-collab-a eval code="app.commands.executeCommandById('obsidian-collab:start-room')"
+    obsidian vault=obsidian-collab-a eval code="app.commands.executeCommandById('obsidian-collab:share-file')"
     obsidian dev:errors
     obsidian dev:debug on && obsidian dev:console level=error
     ```
-- `CHECKLIST.md` lists the Obsidian-side checks to run after changes to editor binding or rooms.
+- `CHECKLIST.md` lists the Obsidian-side checks to run after changes to editor binding or collabs.
 
 ## Commands & settings
 

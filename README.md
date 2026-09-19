@@ -1,6 +1,6 @@
 # Obsidian Collab
 
-Peer-to-peer collaborative editing rooms for Obsidian notes.
+Peer-to-peer collaborative editing of Obsidian files and folders.
 Yjs CRDT over WebRTC. No server ever holds document data.
 
 See [TODO.md](TODO.md) for the plan.
@@ -14,14 +14,15 @@ configurable in the plugin settings, and none can read a note.
 ### Signalling
 
 Peers find each other through Nostr relays. The plugin ships with the public
-relays that [Trystero](https://github.com/dmotz/trystero) uses. A room
-dials a few of them, and the invite link tells guests which, so both sides
-meet. Relays see your IP address, a room id and encrypted connection offers.
+relays that [Trystero](https://github.com/dmotz/trystero) uses. A shared
+file or folder dials a few of them, and its URL tells guests which, so both
+sides meet. Relays see your IP address, an id and encrypted connection
+offers.
 
 To run your own, deploy the Worker in [worker/](worker/README.md), or use
 any Nostr relay, and put its URL in the list. Leave only that URL to keep a
-room on your relay alone, including offline on a LAN. Reset restores the
-default list.
+shared file or folder on your relay alone, including offline on a LAN. Reset
+restores the default list.
 
 ### STUN
 
@@ -37,7 +38,7 @@ firewalls, a TURN server relays the encrypted traffic. Only the peer on the
 strict network needs one, and it fixes every connection that peer makes. Most
 people never need it.
 
-If rooms fail to connect, get TURN credentials and fill them in. The
+If connections fail, get TURN credentials and fill them in. The
 [Open Relay](https://www.metered.ca/tools/openrelay/) free tier works, or
 run [coturn](https://github.com/coturn/coturn) on a machine with a public IP.
 

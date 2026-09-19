@@ -34,7 +34,7 @@ export default defineConfig(
   {
     rules: {
       '@typescript-eslint/no-base-to-string': ['error', { ignoredTypeNames: ['YText'] }],
-      'obsidianmd/ui/sentence-case': ['warn', { acronyms: ['TURN', 'STUN'] }],
+      'obsidianmd/ui/sentence-case': ['warn', { acronyms: ['TURN', 'STUN', 'URL'] }],
     },
   },
   {

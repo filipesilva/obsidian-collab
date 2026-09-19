@@ -6,7 +6,8 @@ import type * as Y from 'yjs';
 
 export const APP_ID = 'obsidian-collab';
 export const RELAY_COUNT = 5;
-const RELAY_CHECK_MS = 4000;
+const RELAY_PROBE_MS = 4000;
+const RELAY_CHECK_INTERVAL_MS = 30000;
 export const DEFAULT_RELAYS: string[] = defaultRelayUrls;
 export const DEFAULT_STUN = [
   'stun:stun.l.google.com:19302',
@@ -49,6 +50,7 @@ export class Provider {
   private peerFound = false;
   private iceFailed = false;
   private destroyed = false;
+  private checkTimer: number;
   private rtcConfig: RTCConfiguration;
   synced = false;
   onPeers: ((count: number) => void) | null = null;
@@ -63,6 +65,7 @@ export class Provider {
     this.join();
     for (const socket of this.relaySockets()) socket.addEventListener('open', () => this.emitStatus());
     this.checkRelays();
+    this.checkTimer = window.setInterval(() => this.checkRelays(), RELAY_CHECK_INTERVAL_MS);
     doc.on('update', this.onUpdate);
   }
 
@@ -76,22 +79,37 @@ export class Provider {
   }
 
   // Relay sockets outlive rooms and can look open while dead, for example
-  // after the app was in the background on a phone. A live relay answers
-  // the subscription right away. Close any that stays silent so Trystero
-  // reconnects it, then rejoin, because only a fresh join announces at once.
+  // after the app was in the background on a phone. Probe each open one
+  // with a subscription a live relay answers at once. Close any that stays
+  // silent so Trystero reconnects it, then rejoin, because only a fresh
+  // join announces at once.
   checkRelays(): void {
-    const silent = new Set(this.relaySockets());
-    for (const socket of silent) socket.addEventListener('message', () => silent.delete(socket), { once: true });
+    const silent = new Set(this.relaySockets().filter((socket) => socket.readyState === WebSocket.OPEN));
+    const probe = `probe-${Math.random().toString(36).slice(2)}`;
+    for (const socket of silent) {
+      const onMessage = (e: MessageEvent) => {
+        if (!String(e.data).includes(probe)) return;
+        silent.delete(socket);
+        socket.removeEventListener('message', onMessage);
+      };
+      socket.addEventListener('message', onMessage);
+      window.setTimeout(() => socket.removeEventListener('message', onMessage), RELAY_PROBE_MS);
+      socket.send(JSON.stringify(['REQ', probe, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [probe] }]));
+    }
     window.setTimeout(() => {
       const dead = [...silent].filter((socket) => socket.readyState === WebSocket.OPEN);
       for (const socket of dead) socket.close();
-      if (dead.length) void this.rejoin();
+      for (const socket of this.relaySockets()) {
+        if (!dead.includes(socket) && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(['CLOSE', probe]));
+      }
+      if (dead.length && !this.destroyed) void this.rejoin();
       else this.emitStatus();
-    }, RELAY_CHECK_MS);
+    }, RELAY_PROBE_MS);
   }
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    window.clearInterval(this.checkTimer);
     this.doc.off('update', this.onUpdate);
     await this.room.leave();
   }

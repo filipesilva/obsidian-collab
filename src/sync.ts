@@ -84,3 +84,24 @@ export function observeDocs(ydoc: Y.Doc, cb: (id: string) => void): () => void {
   docs(ydoc).observe(observer);
   return () => docs(ydoc).unobserve(observer);
 }
+
+export type EntryChange = 'add' | 'delete' | 'update';
+
+// Like observeDocs, but also reports a changed entry, which is a rename.
+// Text edits inside an entry are not reported.
+export function observeEntries(ydoc: Y.Doc, cb: (id: string, change: EntryChange) => void): () => void {
+  const map = docs(ydoc);
+  const observer = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {
+    const changes: [string, EntryChange][] = [];
+    for (const event of events) {
+      if (event.target === map) {
+        for (const [key, change] of (event as Y.YMapEvent<DocEntry>).changes.keys) changes.push([key, change.action]);
+      } else if (event.target.parent === map) {
+        changes.push([event.path[0] as string, 'update']);
+      }
+    }
+    if (changes.length) queueMicrotask(() => changes.forEach(([id, change]) => cb(id, change)));
+  };
+  map.observeDeep(observer);
+  return () => map.unobserveDeep(observer);
+}
