@@ -1,8 +1,20 @@
 import { App, MarkdownView, TFile, debounce } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 import type * as Y from 'yjs';
-import { Winner, bind, isBound, unbind } from './editor';
+import { bind, isBound, unbind } from './editor';
 import { applyContent } from './sync';
+
+// The source-mode editors of every open note, by file.
+export function sourceViews(app: App): Map<TFile, EditorView[]> {
+  const open = new Map<TFile, EditorView[]>();
+  for (const { view } of app.workspace.getLeavesOfType('markdown')) {
+    if (!(view instanceof MarkdownView) || !view.file || view.getMode() !== 'source') continue;
+    const views = open.get(view.file) ?? [];
+    views.push((view.editor as unknown as { cm: EditorView }).cm);
+    open.set(view.file, views);
+  }
+  return open;
+}
 
 // Keeps one note, its open editor and a shared text in agreement.
 // While a source-mode editor shows the file, it is the source of truth:
@@ -61,16 +73,12 @@ export class SharedDoc {
     this.adopting = false;
   }
 
-  rebind(winner: Winner = this.adopting ? 'text' : 'editor'): void {
-    const views = this.app.workspace
-      .getLeavesOfType('markdown')
-      .map((leaf) => leaf.view as MarkdownView)
-      .filter((view) => view.file === this.file && view.getMode() === 'source')
-      .map((view) => (view.editor as unknown as { cm: EditorView }).cm);
+  rebind(open = sourceViews(this.app)): void {
+    const views = open.get(this.file) ?? [];
     if (this.view && views.includes(this.view) && isBound(this.view, this.ytext)) return;
     if (this.view) unbind(this.view);
     this.view = views[0] ?? null;
-    if (this.view) bind(this.view, this.ytext, winner);
+    if (this.view) bind(this.view, this.ytext, this.adopting ? 'text' : 'editor');
   }
 
   async onModify(): Promise<void> {

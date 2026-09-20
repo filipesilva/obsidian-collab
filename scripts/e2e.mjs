@@ -1,4 +1,4 @@
-// End to end: runs the collab checks from CHECKLIST.md against two open dev
+// End to end: runs the collab checks from CHECKLIST.md against the three dev
 // vaults by driving them with the Obsidian CLI. Usage: npm run e2e, or
 // E2E_ONLY=relay npm run e2e for the steps whose name contains 'relay'.
 import { execFileSync, spawn } from 'node:child_process';
@@ -9,13 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 const OBSIDIAN = '/Applications/Obsidian.app/Contents/MacOS/obsidian';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-// The vaults in test-vaults/ must be open in Obsidian. Their names are the
-// folder names.
+// Vault names are the folder names.
 const VAULTS = {
   a: { name: 'one', dir: join(ROOT, 'test-vaults/one') },
   b: { name: 'two', dir: join(ROOT, 'test-vaults/two') },
   c: { name: 'three', dir: join(ROOT, 'test-vaults/three') },
 };
+const ALL = Object.keys(VAULTS);
 
 // Puts the built plugin into a vault, as relative symlinks to the build,
 // and enables it. Reloading then picks up every build.
@@ -111,7 +111,7 @@ async function until(what, test, timeout = 30000) {
     if (await test()) return;
     await sleep(1000);
   }
-  throw new Error(`timed out: ${what}; a=${JSON.stringify(collabs('a'))} b=${JSON.stringify(collabs('b'))}`);
+  throw new Error(`timed out: ${what}; ${ALL.map((v) => `${v}=${JSON.stringify(collabs(v))}`).join(' ')}`);
 }
 
 // E2E_ONLY=<text> runs only the steps whose name contains it.
@@ -124,7 +124,7 @@ async function step(name, fn) {
   } catch (e) {
     results.push(['FAIL', name]);
     console.log(`FAIL ${name}\n     ${String(e.message || e).split('\n')[0]}`);
-    for (const vault of ['a', 'b', 'c']) {
+    for (const vault of ALL) {
       const text = await runAsync(vault, `return await ${PLUGIN}.diagnostics();`, 60000).catch((err) => `diagnostics failed: ${err.message}`);
       console.log(`     diagnostics ${vault}:\n     ${text.replace(/\n/g, '\n     ')}`);
     }
@@ -154,16 +154,23 @@ function parseInvite(url) {
 }
 
 const joinIn = (vault, invite) => runAsync(vault, `await ${PLUGIN}.join(${JSON.stringify(invite)}, true); return 'joined';`, 90000);
-const connectFileIn = (vault, path) =>
-  runAsync(vault, `const f=app.vault.getFileByPath(${JSON.stringify(path)}); await app.workspace.getLeaf(false).openFile(f); const u=app.metadataCache.getFileCache(f).frontmatter['collab-url']; await ${PLUGIN}.join((()=>{const q=u.split('?')[1]; const ps={}; for (const pr of q.split('&')) { const [k,v]=pr.split('='); ps[decodeURIComponent(k)]=decodeURIComponent(v); } const inv={relays:ps.s.split(',').map(decodeURIComponent), id:ps.i, secret:ps.k}; if (ps.d!==undefined) inv.folder=ps.d; else inv.file=ps.f; return inv;})(), true); return 'connected';`, 90000);
+const connectFileIn = async (vault, path) => {
+  await openIn(vault, path);
+  await joinIn(vault, parseInvite(urlOf(vault, path)));
+};
 const typeIn = (vault, text) => run(vault, `const e=app.workspace.activeEditor.editor; e.replaceRange(${JSON.stringify(text)}, {line:e.lastLine(), ch:e.getLine(e.lastLine()).length}); 'typed'`);
 const editorText = (vault) => run(vault, `app.workspace.activeEditor?.editor?.getValue() ?? ''`);
 const openIn = (vault, path) => runAsync(vault, `await app.workspace.getLeaf(false).openFile(app.vault.getFileByPath(${JSON.stringify(path)})); return 'open';`);
 const disconnectAll = (vault) => runAsync(vault, `await ${PLUGIN}.disconnectAll(); return 'done';`);
+// Electron refuses a TURN server on a loopback address, so the local one is
+// reached by the machine's LAN address.
+const LAN = Object.values(networkInterfaces()).flat().find((i) => i?.family === 'IPv4' && !i.internal)?.address;
+const setTurn = (vault, on) =>
+  run(vault, `const p=${PLUGIN}; p.settings.turn=${on ? `{url:'turn:${LAN}:3479', username:'collab', credential:'collab', always:true}` : "{url:'', username:'', credential:'', always:false}"}; p.saveSettings(); 'set'`);
 const errorsBefore = cli('dev:errors');
 
 async function cleanup() {
-  for (const vault of ['a', 'b', 'c']) {
+  for (const vault of ALL) {
     run(vault, `document.querySelector('.modal-close-button')?.click(); 'closed'`);
     await disconnectAll(vault).catch(() => {});
     await runAsync(
@@ -182,8 +189,6 @@ if (!existsSync(join(ROOT, 'main.js'))) {
   process.exit(1);
 }
 console.log(`collab e2e against test-vaults ${Object.values(VAULTS).map((v) => v.name).join(', ')}`);
-// Leftover settings must not shape the run.
-for (const v of ['a', 'b', 'c']) run(v, `const p=${PLUGIN}; p.settings.turn={url:'', username:'', credential:'', always:false}; p.saveSettings(); 'reset'`);
 // A local STUN and TURN server for the relay step, killed at the end.
 const turn = spawn(process.execPath, ['test/turn-server.mjs'], { stdio: 'ignore', detached: true });
 const stopTurn = () => {
@@ -216,13 +221,15 @@ for (const [key, v] of Object.entries(VAULTS)) {
   // needs Obsidian to rescan and enable it.
   await runAsync(key, `if (!app.plugins.isEnabled()) await app.plugins.setEnable(true); await app.plugins.loadManifests(); if (!app.plugins.plugins['obsidian-collab']) await app.plugins.enablePluginAndSave('obsidian-collab'); return !!app.plugins.plugins['obsidian-collab'];`, 30000);
 }
+// Leftover settings must not shape the run.
+for (const vault of ALL) setTurn(vault, false);
 
 await cleanup();
-for (const vault of ['a', 'b', 'c']) cli(`vault=${VAULTS[vault].name}`, 'plugin:reload', 'id=obsidian-collab');
+for (const vault of ALL) cli(`vault=${VAULTS[vault].name}`, 'plugin:reload', 'id=obsidian-collab');
 await sleep(1500);
 
 await step('status bar starts at 0 connected', async () => {
-  for (const vault of ['a', 'b', 'c']) assert(status(vault) === '0 connected', `${vault}: ${status(vault)}`);
+  for (const vault of ALL) assert(status(vault) === '0 connected', `${vault}: ${status(vault)}`);
 });
 
 let url = '';
@@ -259,7 +266,7 @@ await step('a third peer joins, everyone syncs, then it leaves', async () => {
   await joinIn('c', parseInvite(url));
   const cFile = collabs('c')[0]?.docs[0];
   assert(cFile, 'c not connected');
-  await until('everyone has two peers', () => ['a', 'b', 'c'].every((v) => collabs(v)[0]?.peers === 2), 30000);
+  await until('everyone has two peers', () => ALL.every((v) => collabs(v)[0]?.peers === 2), 30000);
   await until('c has the content', () => editorText('c').includes('+b'), 15000);
   typeIn('c', ' +c');
   await until('a and b see +c', () => editorText('a').includes('+c') && editorText('b').includes('+c'), 15000);
@@ -341,14 +348,9 @@ await step('reconnect folder from state and stop sharing', async () => {
   assert(existsSync(file('b', `${FOLDER}/One.md`)), 'notes should stay');
 });
 
-// Electron refuses a TURN server on a loopback address, so the local one is
-// reached by the machine's LAN address.
-const LAN = Object.values(networkInterfaces()).flat().find((i) => i?.family === 'IPv4' && !i.internal)?.address;
 const RELAY_FILE = `${PREFIX} relay.md`;
 await step('b connects through TURN with Always relay', async () => {
   assert(LAN, 'no LAN address, the relay step needs a network interface');
-  const setTurn = (v, on) =>
-    run(v, `const p=${PLUGIN}; p.settings.turn=${on ? `{url:'turn:${LAN}:3479', username:'collab', credential:'collab', always:true}` : "{url:'', username:'', credential:'', always:false}"}; p.saveSettings(); 'set'`);
   setTurn('b', true);
   // Trystero reuses an idle connection to a known peer across rooms, so a
   // fresh plugin instance is needed for the policy to apply.

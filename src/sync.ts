@@ -19,8 +19,8 @@ export function getText(ydoc: Y.Doc, id: string): Y.Text | undefined {
 
 // Returns the shared text for a doc, seeding it from the file when the
 // room does not have it yet. The file always wins over whatever state the
-// text has at call time. Call again after a sync to rebind if a concurrent seed
-// on another peer won.
+// text has at call time. A concurrent seed on another peer can still replace
+// the entry: see Collab.adoptReplaced.
 export function openDoc(ydoc: Y.Doc, info: DocInfo): Y.Text {
   const existing = getText(ydoc, info.id);
   if (existing) {

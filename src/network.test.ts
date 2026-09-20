@@ -2,13 +2,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { getRelaySockets } from 'trystero';
 import * as Y from 'yjs';
-import { DEFAULT_RELAYS, Provider, RELAY_COUNT, pickRelays } from './network';
+import { DEFAULT_RELAYS, Provider, RELAY_COUNT, type RoomOptions, pickRelays } from './network';
 
 // The test worker serves one isolated relay per path.
 const RELAY = 'ws://localhost:8788';
 const LOCAL_RELAYS = [RELAY];
 // The test setup also runs a STUN and TURN server, credentials collab/collab.
 const LOCAL_TURN: RTCIceServer = { urls: 'turn:127.0.0.1:3479', username: 'collab', credential: 'collab' };
+
+// The provider's upkeep cycles, shortened so a test sees several of them.
+const QUICK = { alone: 3000, relayCheck: 3000 };
 
 interface PeerMessage {
   type: 'ready' | 'peers' | 'text';
@@ -20,6 +23,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(what)), ms))]);
 }
 
+// Both sides of a connection settle on their own, so state is polled.
+async function until(test: () => boolean | Promise<boolean>, what: string, ms = 10000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!(await test())) {
+    if (Date.now() > deadline) throw new Error(what);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 // A peer in an iframe. Messages are matched by source, so several can run.
 class Peer {
   private iframe: HTMLIFrameElement;
@@ -27,10 +39,10 @@ class Peer {
   peers = 0;
   text = '';
 
-  constructor(config: { room: string; secret: string; relays: string[] }) {
+  constructor(config: RoomOptions) {
     this.iframe = document.createElement('iframe');
-    const { room, secret, relays } = config;
-    this.iframe.srcdoc = `<script>window.config = ${JSON.stringify({ room, secret, relays })}</script>
+    const { room, secret, relays, timing } = config;
+    this.iframe.srcdoc = `<script>window.config = ${JSON.stringify({ room, secret, relays, timing })}</script>
 <script type="module" src="/src/test/peer.ts"></script>`;
     window.addEventListener('message', this.onMessage);
     document.body.appendChild(this.iframe);
@@ -80,13 +92,13 @@ class Peer {
   }
 }
 
-function newConfig(relays: string[]) {
-  return { room: crypto.randomUUID(), secret: crypto.randomUUID(), relays };
+function newConfig(relays: string[], timing?: RoomOptions['timing']): RoomOptions {
+  return { room: crypto.randomUUID(), secret: crypto.randomUUID(), relays, timing };
 }
 
 // The page's own peer: a Provider on a doc that starts with 'hello'. The
 // iframe peers get the same config, minus the rtc part.
-function local(config: { room: string; secret: string; relays: string[]; rtc?: RTCConfiguration }) {
+function local(config: RoomOptions) {
   const doc = new Y.Doc();
   const text = doc.getText('t');
   text.insert(0, 'hello');
@@ -110,8 +122,8 @@ function local(config: { room: string; secret: string; relays: string[]; rtc?: R
   return { doc, text, provider, gone, waitText };
 }
 
-async function syncWithPeer(relays: string[], sabotage: (provider: Provider) => Promise<void> = async () => {}) {
-  const config = newConfig(relays);
+async function syncWithPeer(relays: string[], sabotage: (provider: Provider) => Promise<void> = async () => {}, timing?: RoomOptions['timing']) {
+  const config = newConfig(relays, timing);
   const me = local(config);
   await sabotage(me.provider);
   const peer = new Peer(config);
@@ -168,7 +180,7 @@ describe('Provider', () => {
   });
 
   it('is not reachable when no relay answers', { timeout: 15000 }, async () => {
-    const provider = new Provider(new Y.Doc(), { room: 'r', secret: 's', relays: ['ws://localhost:1'] });
+    const provider = new Provider(new Y.Doc(), { room: 'r', secret: 's', relays: ['ws://localhost:1'], timing: { reachable: 1500 } });
     expect(await provider.reachable).toBe(false);
     await provider.destroy();
   });
@@ -183,10 +195,10 @@ describe('Provider', () => {
       const socket = sockets()[RELAY]!;
       while (socket.readyState !== WebSocket.OPEN) await new Promise((r) => setTimeout(r, 20));
       provider.checkRelays();
-      await new Promise((r) => setTimeout(r, 4500));
+      await new Promise((r) => setTimeout(r, 1500));
       expect(sockets()[RELAY]).toBe(socket);
       expect(socket.readyState).toBe(WebSocket.OPEN);
-    });
+    }, { relayProbe: 1000 });
   });
 
   it('recovers from a relay socket that looks open but is dead', { timeout: 40000 }, async () => {
@@ -213,7 +225,7 @@ describe('Provider', () => {
         zombie.send = () => {};
         zombie.onmessage = null;
         provider.checkRelays();
-      });
+      }, { relayProbe: 1000 });
     } finally {
       WebSocket.prototype.send = send;
     }
@@ -239,7 +251,7 @@ describe('the mesh', () => {
     try {
       await Promise.all([b.waitText((t) => t === 'hello'), c.waitText((t) => t === 'hello')]);
       await Promise.all([b.waitPeers(2), c.waitPeers(2)]);
-      expect(me.provider.peers).toHaveLength(2);
+      await until(() => me.provider.peers.length === 2, 'the page never had 2 peers');
       b.insert(' b');
       await me.waitText((t) => t.endsWith(' b'));
       await c.waitText((t) => t.endsWith(' b'));
@@ -317,8 +329,11 @@ describe('TURN', () => {
       expect(await me.provider.paths()).toEqual(['relay']);
       const lines = await me.provider.describeConnections();
       expect(lines.find((l) => l.startsWith('peer '))).toContain('relay>');
-      // Three spare pooled offers, refilled after the live one was taken.
-      expect(lines.find((l) => l.startsWith('pool '))).toMatch(/have-local-offer\/\w+\/new:3/);
+      // The pool is patched down to 3 offers. All are spare when the peer's
+      // offer made the connection, one fewer when ours did.
+      const pool = lines.find((l) => l.startsWith('pool ')) ?? '';
+      const spare = [...pool.matchAll(/have-local-offer\/\w+\/new:(\d+)/g)].reduce((n, m) => n + Number(m[1]), 0);
+      expect([2, 3]).toContain(spare);
       peer.insert(' via relay');
       await me.waitText((t) => t === 'hello via relay');
     } finally {
@@ -346,14 +361,14 @@ describe('rejoining', () => {
     document.body.innerHTML = '';
   });
 
-  // Alone, the provider rejoins every 10 s to announce again. A peer that
-  // arrives after that must still connect, and a connected pair must not
-  // be disturbed by the cycle.
-  it('is still joinable after a lone rejoin cycle', { timeout: 80000 }, async () => {
-    const config = newConfig(LOCAL_RELAYS);
+  // Alone, the provider rejoins every so often to announce again. A peer
+  // that arrives after that must still connect, and a connected pair must
+  // not be disturbed by the cycle. QUICK makes it 3 s, not 10 s and 30 s.
+  it('is still joinable after a lone rejoin cycle', { timeout: 60000 }, async () => {
+    const config = newConfig(LOCAL_RELAYS, QUICK);
     const me = local(config);
     try {
-      await new Promise((r) => setTimeout(r, 35000));
+      await new Promise((r) => setTimeout(r, 10000));
       const peer = new Peer(config);
       try {
         await peer.waitText((t) => t === 'hello', 20000);
@@ -367,14 +382,14 @@ describe('rejoining', () => {
     }
   });
 
-  it('keeps a pair connected across a cycle', { timeout: 80000 }, async () => {
-    const config = newConfig(LOCAL_RELAYS);
+  it('keeps a pair connected across a cycle', { timeout: 60000 }, async () => {
+    const config = newConfig(LOCAL_RELAYS, QUICK);
     const me = local(config);
     const peer = new Peer(config);
     try {
       await peer.waitText((t) => t === 'hello');
       const attempts = me.provider.status().attempts;
-      await new Promise((r) => setTimeout(r, 35000));
+      await new Promise((r) => setTimeout(r, 7000));
       expect(me.provider.peers).toHaveLength(1);
       expect(me.provider.status().attempts).toBe(attempts);
       peer.insert('!');

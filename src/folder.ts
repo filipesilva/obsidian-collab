@@ -1,6 +1,6 @@
 import { App, TFile, TFolder, normalizePath } from 'obsidian';
 import type { Collab } from './collab';
-import { MARKER, markerPath } from './identity';
+import { markerPath } from './identity';
 import { getText, observeEntries } from './sync';
 
 // Keeps a folder collab and the vault folder in agreement: every markdown
@@ -8,16 +8,20 @@ import { getText, observeEntries } from './sync';
 // create, rename, move and delete travel both ways.
 export class FolderSync {
   // Vault paths we are changing ourselves, so the vault event is not echoed.
+  // The entries cannot tell an echo apart: another doc may hold the path by then.
   private busy = new Set<string>();
   private stops: (() => void)[] = [];
 
   constructor(
     private app: App,
     private collab: Collab,
-    readonly root: string,
     // Called when the folder or its marker disappears locally.
     private onGone: () => void,
   ) {}
+
+  private get root(): string {
+    return this.collab.folder ?? '';
+  }
 
   private rel(path: string): string {
     return this.root ? path.slice(this.root.length + 1) : path;
@@ -31,36 +35,28 @@ export class FolderSync {
     return path.endsWith('.md') && path !== markerPath(this.root) && this.collab.contains(path);
   }
 
-  files(): TFile[] {
-    return this.app.vault.getMarkdownFiles().filter((file) => this.isMember(file.path));
+  private add(file: TFile) {
+    return this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
   }
 
-  // Sharing: every markdown file becomes a doc.
-  async seed(): Promise<void> {
-    for (const file of this.files()) await this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
-  }
-
-  // Connecting: bind every entry to its file, creating missing files, and
-  // share local files the collab does not know.
-  async reconcile(): Promise<void> {
-    for (const [id, entry] of this.collab.entries()) {
-      const path = this.abs(String(entry.get('path')));
-      const file = this.app.vault.getFileByPath(path);
-      if (file) await this.collab.attach(file, id);
-      else await this.create(id, path, getText(this.collab.ydoc, id)?.toString() ?? '');
+  // Bind every entry to its file, creating missing files, share local files
+  // the collab does not know, then keep both sides in step. A new share has
+  // no entries yet, so every markdown file becomes a doc.
+  async start(): Promise<void> {
+    for (const [id] of this.collab.entries()) await this.onEntry(id, 'add');
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (this.isMember(file.path) && !this.collab.docs.has(file.path)) await this.add(file);
     }
-    for (const file of this.files()) {
-      if (!this.collab.docs.has(file.path)) await this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
-    }
+    this.watch();
   }
 
-  watch(): void {
+  private watch(): void {
     this.stops.push(observeEntries(this.collab.ydoc, (id, change) => void this.onEntry(id, change)));
     const { vault } = this.app;
     const refs = [
       vault.on('create', (file) => {
         if (this.busy.has(file.path) || !(file instanceof TFile) || !this.isMember(file.path)) return;
-        void this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
+        void this.add(file);
       }),
       vault.on('delete', (file) => {
         if (this.busy.delete(file.path)) return;
@@ -80,7 +76,7 @@ export class FolderSync {
         const doc = this.collab.docs.get(file.path);
         if (this.isMember(file.path)) {
           if (doc) this.collab.setEntryPath(doc.id, this.rel(file.path));
-          else void this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
+          else void this.add(file);
         } else if (doc) {
           this.collab.removeDoc(doc.id);
         }
@@ -110,7 +106,7 @@ export class FolderSync {
     if (!doc) {
       const file = this.app.vault.getFileByPath(path);
       if (file) await this.collab.attach(file, id);
-      else await this.create(id, path, getText(this.collab.ydoc, id)?.toString() ?? '');
+      else await this.create(id, path);
     } else if (doc.file.path !== path) {
       // A plain rename: the peer that renamed already rewrote its links,
       // and those edits arrive as text.
@@ -120,10 +116,10 @@ export class FolderSync {
     }
   }
 
-  private async create(id: string, path: string, content: string) {
+  private async create(id: string, path: string) {
     await this.ensureFolder(path);
     this.busy.add(path);
-    const file = await this.app.vault.create(path, content);
+    const file = await this.app.vault.create(path, getText(this.collab.ydoc, id)?.toString() ?? '');
     this.busy.delete(path);
     await this.collab.attach(file, id);
   }
@@ -133,8 +129,4 @@ export class FolderSync {
     if (!parent || this.app.vault.getFolderByPath(parent)) return;
     await this.app.vault.createFolder(parent);
   }
-}
-
-export function isMarker(file: TFile): boolean {
-  return file.name === MARKER;
 }

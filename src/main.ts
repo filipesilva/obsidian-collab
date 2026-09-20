@@ -1,13 +1,14 @@
-import { Menu, Notice, Platform, Plugin, TFile, TFolder } from 'obsidian';
+import { Menu, Notice, Plugin, TFile, TFolder } from 'obsidian';
 import { Collab } from './collab';
+import { gatherDiagnostics, natCheck } from './diagnostics';
 import { collabExtension } from './editor';
 import { FolderSync } from './folder';
 import { readInvite, readUrl, removeUrl, writeUrl } from './frontmatter';
 import { MARKER, findById, markerPath } from './identity';
 import { Invite, inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
-import { AskUrl, Confirm, ConfirmJoin, ShowText, createNote } from './join';
-import { checkNat, checkTurn, describeNat, listCandidates, liveRelays, probeSockets } from './nat';
-import { RELAY_COUNT, type Status, pickRelays } from './network';
+import { AskUrl, Confirm, ShowText, confirmJoin, createNote } from './join';
+import { checkTurn, describeNat, liveRelays } from './nat';
+import { RELAY_COUNT, type Status } from './network';
 import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
 import type { StateStore } from './state';
 import { vaultStore } from './vault-store';
@@ -16,18 +17,25 @@ const MARKER_BODY = `This folder is shared with the Collab plugin. Every markdow
 with everyone who joined the URL above. This file itself is not synced.
 `;
 
+// What the plugin holds for a connected collab, released in teardown.
+interface Session {
+  sync?: FolderSync;
+  // Refreshes the notice of the connect stage in progress.
+  update?: () => void;
+  // The last status, to tell a new attempt or failure from an old one.
+  seen: Status;
+  peerNotice?: Notice;
+  failureTimer?: number;
+}
+
 export default class CollabPlugin extends Plugin {
   settings!: CollabSettings;
   // Connected collabs by id.
   collabs = new Map<string, Collab>();
-  private folders = new Map<string, FolderSync>();
+  private sessions = new Map<Collab, Session>();
   store!: StateStore;
   private statusBar!: HTMLElement;
   private natCheckedAt = 0;
-  private statusUpdaters = new Map<string, () => void>();
-  private seenStatus = new Map<string, { attempts: number; failures: number }>();
-  private peerNotices = new Map<string, Notice>();
-  private failureTimers = new Map<string, number>();
 
   async onload() {
     await this.loadSettings();
@@ -50,14 +58,10 @@ export default class CollabPlugin extends Plugin {
       return invite && invite.folder === undefined ? invite : null;
     };
     // The shared folder the active file is in, or the folder it could share.
-    const sharedFolder = () => {
-      const file = activeFile();
-      return file && this.sharedFolderOf(file.path);
-    };
+    const sharedFolder = () => this.sharedFolderOf(activeFile()?.parent ?? null);
     const plainFolder = () => {
-      const file = activeFile();
-      const folder = file?.parent;
-      return folder && !this.sharedFolderOf(file.path) && !this.containsShared(folder) ? folder : null;
+      const folder = activeFile()?.parent;
+      return folder && !this.sharedFolderOf(folder) && !this.containsShared(folder) ? folder : null;
     };
 
     this.addCommand({
@@ -101,7 +105,7 @@ export default class CollabPlugin extends Plugin {
       name: 'Connect folder',
       checkCallback: (checking) => {
         const folder = sharedFolder();
-        if (!folder || this.collabOf(folder.path)) return false;
+        if (!folder || this.collabOf(folderPath(folder))) return false;
         if (!checking) void this.connectFolder(folder);
         return true;
       },
@@ -124,7 +128,7 @@ export default class CollabPlugin extends Plugin {
         const folder = sharedFolder();
         const url = folder && this.folderUrl(folder);
         if (!url) return false;
-        if (!checking) void this.copy(url, folder.name || 'the vault');
+        if (!checking) void this.copy(url, folderName(folder));
         return true;
       },
     });
@@ -144,7 +148,7 @@ export default class CollabPlugin extends Plugin {
       name: 'Disconnect folder',
       checkCallback: (checking) => {
         const folder = sharedFolder();
-        const collab = folder && this.collabOf(folder.path);
+        const collab = folder && this.collabOf(folderPath(folder));
         if (!collab) return false;
         if (!checking) void this.disconnect(collab);
         return true;
@@ -172,7 +176,7 @@ export default class CollabPlugin extends Plugin {
     this.addCommand({
       id: 'check-network',
       name: 'Check network',
-      callback: () => void this.checkNetwork(true),
+      callback: () => void this.checkNetwork(),
     });
     this.addCommand({
       id: 'stop-sharing-file',
@@ -234,21 +238,18 @@ export default class CollabPlugin extends Plugin {
     return undefined;
   }
 
-  // The nearest folder with a marker, walking up from a path.
-  sharedFolderOf(path: string): TFolder | null {
-    let folder = this.app.vault.getAbstractFileByPath(path)?.parent ?? null;
-    if (this.app.vault.getAbstractFileByPath(path) instanceof TFolder) folder = this.app.vault.getFolderByPath(path);
+  // The nearest folder with a marker, walking up from a folder.
+  sharedFolderOf(folder: TFolder | null): TFolder | null {
     for (; folder; folder = folder.parent) if (this.markerOf(folder)) return folder;
     return null;
   }
 
   private containsShared(folder: TFolder): boolean {
-    const prefix = folder.isRoot() ? '' : `${folder.path}/`;
-    return this.app.vault.getMarkdownFiles().some((file) => file.name === MARKER && file.path.startsWith(prefix));
+    return folder.children.some((child) => (child instanceof TFolder ? this.containsShared(child) : child.name === MARKER));
   }
 
   private markerOf(folder: TFolder): TFile | null {
-    return this.app.vault.getFileByPath(markerPath(folder.isRoot() ? '' : folder.path));
+    return this.app.vault.getFileByPath(markerPath(folderPath(folder)));
   }
 
   private folderUrl(folder: TFolder): string | undefined {
@@ -257,7 +258,7 @@ export default class CollabPlugin extends Plugin {
   }
 
   private folderMenu(menu: Menu, folder: TFolder) {
-    const collab = this.collabOf(folder.isRoot() ? '' : folder.path);
+    const collab = this.collabOf(folderPath(folder));
     const marker = this.markerOf(folder);
     if (marker) {
       if (collab && collab.folder !== null) {
@@ -265,11 +266,10 @@ export default class CollabPlugin extends Plugin {
       } else {
         menu.addItem((item) => item.setTitle('Connect folder').setIcon('plug').onClick(() => void this.connectFolder(folder)));
       }
-      menu.addItem((item) =>
-        item.setTitle('Copy folder URL').setIcon('link').onClick(() => void this.copy(this.folderUrl(folder) ?? '', folder.name)),
-      );
+      const url = this.folderUrl(folder);
+      if (url) menu.addItem((item) => item.setTitle('Copy folder URL').setIcon('link').onClick(() => void this.copy(url, folderName(folder))));
       menu.addItem((item) => item.setTitle('Stop sharing folder').setIcon('x').onClick(() => void this.stopSharingFolder(folder)));
-    } else if (!this.sharedFolderOf(folder.path) && !this.containsShared(folder)) {
+    } else if (!this.sharedFolderOf(folder) && !this.containsShared(folder)) {
       menu.addItem((item) => item.setTitle('Share folder').setIcon('users').onClick(() => void this.shareFolder(folder)));
     }
   }
@@ -288,10 +288,9 @@ export default class CollabPlugin extends Plugin {
     if (!this.collabs.size) return 'Collab: nothing connected';
     const lines: string[] = [];
     for (const collab of this.collabs.values()) {
-      const name = collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || 'the vault';
       const paths = await collab.paths();
       const detail = paths.length ? ` (${paths.join(', ')})` : '';
-      lines.push(`${name}: ${collab.peers} ${collab.peers === 1 ? 'peer' : 'peers'}${detail}`);
+      lines.push(`${collabName(collab)}: ${plural(collab.peers, 'peer')}${detail}`);
     }
     return `Collab: ${lines.join(', ')}`;
   }
@@ -300,8 +299,7 @@ export default class CollabPlugin extends Plugin {
   // click for the list.
   private updateStatus() {
     const n = this.collabs.size;
-    const peers = this.peerTotal();
-    this.statusBar.setText(n ? `${n} connected, ${peers} ${peers === 1 ? 'peer' : 'peers'}` : '0 connected');
+    this.statusBar.setText(n ? `${n} connected, ${plural(this.peerTotal(), 'peer')}` : '0 connected');
     this.statusBar.toggleClass('mod-clickable', n > 0);
   }
 
@@ -309,11 +307,10 @@ export default class CollabPlugin extends Plugin {
     if (!this.collabs.size) return;
     const menu = new Menu();
     for (const collab of this.collabs.values()) {
-      const name = collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || 'the vault';
-      const peers = collab.peers;
+      const title = `Disconnect ${collabName(collab)} (${plural(collab.peers, 'peer')})`;
       menu.addItem((item) =>
         item
-          .setTitle(`Disconnect ${name} (${peers} ${peers === 1 ? 'peer' : 'peers'})`)
+          .setTitle(title)
           .setIcon('unplug')
           .onClick(() => void this.disconnect(collab)),
       );
@@ -352,15 +349,11 @@ export default class CollabPlugin extends Plugin {
     await writeUrl(this.app, file, inviteUrl(invite));
     const collab = await this.open(invite, file.path);
     await collab.seed(file, collab.id);
-    await this.copy(collab.url, file.basename);
+    void this.copy(collab.url, file.basename);
     await this.connectWith(collab, file.basename);
   }
 
   async shareFolder(folder: TFolder) {
-    const invite = await this.newInvite();
-    if (!invite) return;
-    const path = folder.isRoot() ? '' : folder.path;
-    invite.folder = path;
     if (folder.isRoot()) {
       const ok = await new Confirm(
         this.app,
@@ -370,13 +363,15 @@ export default class CollabPlugin extends Plugin {
       ).ask();
       if (!ok) return;
     }
+    const invite = await this.newInvite();
+    if (!invite) return;
+    const path = folderPath(folder);
+    invite.folder = path;
     await this.writeMarker(path, inviteUrl(invite));
     const collab = await this.open(invite, path);
-    const sync = this.folderSync(collab);
-    await sync.seed();
-    sync.watch();
-    await this.copy(collab.url, folder.name || 'the vault');
-    await this.connectWith(collab, folder.name || 'the vault');
+    await this.folderSync(collab).start();
+    void this.copy(collab.url, folderName(folder));
+    await this.connectWith(collab, folderName(folder));
   }
 
   async joinUrl() {
@@ -394,7 +389,7 @@ export default class CollabPlugin extends Plugin {
       new Notice('Collab: already connected');
       return;
     }
-    if (!confirmed && !(await new ConfirmJoin(this.app, invite).ask())) return;
+    if (!confirmed && !(await confirmJoin(this.app, invite))) return;
     if (invite.folder === undefined) {
       // A note with this id may already be here from an earlier join.
       const known = findById(
@@ -433,26 +428,20 @@ export default class CollabPlugin extends Plugin {
     await this.connectFolder(this.app.vault.getFolderByPath(path)!, invite, true);
   }
 
-  // The file has the property. With saved state, bind at once and let the
-  // CRDT merge. Without it, wait for a peer who has the doc.
+  // The file has the property.
   async connectFile(file: TFile, invite: Invite, fresh = false) {
     if (this.collabs.has(invite.id)) {
       new Notice('Collab: already connected');
       return;
     }
     const collab = await this.open(invite, file.path);
-    if (collab.hasState) {
-      await collab.attach(file, collab.id);
-      await this.connectWith(collab, file.basename);
-      return;
-    }
-    if (!fresh) this.noHistory(file.basename);
-    await this.connectWith(collab, file.basename, async () => {
-      if (!(await collab.waitFor(collab.id))) return false;
-      const doc = await collab.attach(file, collab.id);
-      await doc.ready;
-      return true;
-    });
+    await this.bindAndConnect(
+      collab,
+      file.basename,
+      fresh,
+      () => collab.waitFor(collab.id),
+      async () => (await collab.attach(file, collab.id)).ready,
+    );
   }
 
   // The invite is passed when the marker was just written, since the
@@ -470,18 +459,27 @@ export default class CollabPlugin extends Plugin {
     }
     const collab = await this.open(invite, invite.folder);
     const sync = this.folderSync(collab);
-    const name = folder.name || 'the vault';
+    await this.bindAndConnect(
+      collab,
+      folderName(folder),
+      fresh,
+      () => collab.waitSynced(),
+      () => sync.start(),
+    );
+  }
+
+  // With saved state, bind at once and let the CRDT merge. Without it, wait
+  // for a peer who has the content, then bind.
+  private async bindAndConnect(collab: Collab, name: string, fresh: boolean, arrived: () => Promise<boolean>, bind: () => Promise<void>) {
     if (collab.hasState) {
-      await sync.reconcile();
-      sync.watch();
+      await bind();
       await this.connectWith(collab, name);
       return;
     }
     if (!fresh) this.noHistory(name);
     await this.connectWith(collab, name, async () => {
-      if (!(await collab.waitSynced())) return false;
-      await sync.reconcile();
-      sync.watch();
+      if (!(await arrived())) return false;
+      await bind();
       return true;
     });
   }
@@ -499,21 +497,24 @@ export default class CollabPlugin extends Plugin {
   // so a warning up front would be noise.
   private verdict: string | null = null;
 
-  async checkNetwork(always: boolean) {
-    if (!always && Date.now() - this.natCheckedAt < 60000) return;
+  private async refreshVerdict() {
     this.natCheckedAt = Date.now();
-    const check = await checkNat(this.settings.stun, () => probeSockets(pickRelays(this.settings.relays, 5)));
-    const turn = turnServer(this.settings);
-    const worrying = !check.online || (!this.settings.turn.always && (check.needsTurn || check.symmetric));
+    const check = await natCheck(this.settings);
+    const relayed = rtcConfig(this.settings).iceTransportPolicy === 'relay';
+    const worrying = !check.online || (!relayed && (check.needsTurn || check.symmetric));
     this.verdict = worrying ? describeNat(check) : null;
-    if (always) new Notice(`Collab: ${describeNat(check)}.`, worrying ? 15000 : 5000);
-    if (turn && always && check.online) {
-      const ok = await checkTurn(turn);
-      new Notice(ok ? 'Collab: TURN works.' : 'Collab: TURN did not answer. Check the URL, username and credential in settings.', ok ? 5000 : 15000);
-    }
+    return check;
   }
 
-  // Everything needed to debug a connection from afar, on the clipboard.
+  async checkNetwork() {
+    const check = await this.refreshVerdict();
+    new Notice(`Collab: ${describeNat(check)}.`, this.verdict ? 15000 : 5000);
+    const turn = turnServer(this.settings);
+    if (!turn || !check.online) return;
+    const ok = await checkTurn(turn);
+    new Notice(ok ? 'Collab: TURN works.' : 'Collab: TURN did not answer. Check the URL, username and credential in settings.', ok ? 5000 : 15000);
+  }
+
   async showDiagnostics() {
     const notice = new Notice('Collab: gathering diagnostics…', 0);
     try {
@@ -523,55 +524,29 @@ export default class CollabPlugin extends Plugin {
     }
   }
 
-  // Everything needed to debug a connection from afar, as text.
-  async diagnostics(): Promise<string> {
-    const started = Date.now();
-    const platform = Platform.isIosApp ? 'ios' : Platform.isAndroidApp ? 'android' : Platform.isMacOS ? 'macos' : Platform.isWin ? 'windows' : 'linux';
-    const lines: string[] = [`collab ${this.manifest.version} ${platform} ${new Date().toISOString()}`, `online=${navigator.onLine}`];
-    try {
-      const nat = await checkNat(this.settings.stun, () => probeSockets(pickRelays(this.settings.relays, 5)));
-      lines.push(`nat: ${JSON.stringify(nat)} -> ${describeNat(nat)}`);
-      const turn = turnServer(this.settings);
-      lines.push(`turn: ${turn ? `${String(turn.urls)} always=${this.settings.turn.always}` : 'none'}`);
-      if (turn) lines.push(`turn test: ${await checkTurn(turn)}`);
-      const withStun = await listCandidates({ iceServers: [{ urls: this.settings.stun }] });
-      // Candidate lines here start at the component: "1 udp <priority> <address> <port> typ …".
-      const publicAddresses = [...new Set(withStun.filter((l) => / typ srflx /.test(l)).map((l) => l.split(' ')[3]))];
-      lines.push(`public address: ${publicAddresses.join(', ') || 'none seen'}`);
-      lines.push(`network: ${describeNetwork(withStun)}${Platform.isIosApp ? ' (a guess: iOS marks every candidate as costly)' : ''}`);
-      lines.push('candidates with stun:');
-      for (const line of withStun) lines.push(`  ${line}`);
-      if (turn) {
-        lines.push('candidates with turn only:');
-        for (const line of await listCandidates({ iceServers: [turn], iceTransportPolicy: 'relay' })) lines.push(`  ${line}`);
-      }
-      for (const collab of this.collabs.values()) {
-        lines.push(`collab ${collab.path}: peers=${collab.peers} status=${JSON.stringify(collab.status())}`);
-        for (const line of await collab.describeConnections()) lines.push(`  ${line}`);
-      }
-    } catch (e) {
-      lines.push(`error: ${String(e)}`);
-    }
-    lines.push(`gathered in ${((Date.now() - started) / 1000).toFixed(1)}s`);
-    return lines.join('\n');
+  // The e2e reads this.
+  diagnostics(): Promise<string> {
+    return gatherDiagnostics(this.manifest.version, this.settings, this.collabs.values());
   }
 
   // Connects with a notice that stays until we know whether relays can
   // reach us. Without saved state it then waits, visibly, for a peer to
   // hand over the content. Disconnecting cancels either wait.
   private async connectWith(collab: Collab, name: string, receive?: () => Promise<boolean>) {
+    const session = this.sessions.get(collab);
+    if (!session) return;
     const notice = new Notice(`Collab: connecting ${name}…`, 0);
     const connecting = () => {
       const { relays } = collab.status();
-      notice.setMessage(relays ? `Collab: connecting ${name}, ${relays} ${relays === 1 ? 'relay' : 'relays'} open…` : `Collab: connecting ${name}…`);
+      notice.setMessage(relays ? `Collab: connecting ${name}, ${plural(relays, 'relay')} open…` : `Collab: connecting ${name}…`);
     };
     try {
       collab.connect((status) => this.onStatus(collab, name, status));
-      this.statusUpdaters.set(collab.id, connecting);
+      session.update = connecting;
       connecting();
       const reachable = await collab.waitReachable();
-      this.statusUpdaters.delete(collab.id);
-      if (!this.collabs.has(collab.id)) return;
+      session.update = undefined;
+      if (!this.sessions.has(collab)) return;
       if (!reachable) {
         const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
         new Notice(`Collab: ${name} could not reach any signalling server. Check the network and the signalling list. Still trying…${why}`, 15000);
@@ -580,22 +555,21 @@ export default class CollabPlugin extends Plugin {
         // already announced itself. Saying "waiting" after that reads
         // backwards, and once one arrives the waiting is over.
         const waiting = new Notice(`Collab: ${name} ready, waiting for peers…`);
-        this.statusUpdaters.set(collab.id, () => {
-          if (collab.peers) {
-            waiting.hide();
-            this.statusUpdaters.delete(collab.id);
-          }
-        });
+        session.update = () => {
+          if (!collab.peers) return;
+          waiting.hide();
+          session.update = undefined;
+        };
       }
       if (!receive) return;
       notice.setMessage(`Collab: waiting for someone who has ${name}…`);
-      this.statusUpdaters.set(collab.id, () => {
+      session.update = () => {
         if (collab.peers) notice.setMessage(`Collab: receiving ${name}…`);
-      });
+      };
       const received = await receive();
-      this.statusUpdaters.delete(collab.id);
+      session.update = undefined;
       if (received) new Notice(`Collab: received ${name}, editing`);
-      else if (this.collabs.has(collab.id)) await this.disconnect(collab);
+      else if (this.sessions.has(collab)) await this.disconnect(collab);
     } finally {
       notice.hide();
     }
@@ -606,57 +580,49 @@ export default class CollabPlugin extends Plugin {
   // reported only when nothing has connected a few seconds after it.
   private onStatus(collab: Collab, name: string, status: Status) {
     // ICE events can still arrive from a collab that was just disconnected.
-    if (this.collabs.get(collab.id) !== collab) return;
-    this.statusUpdaters.get(collab.id)?.();
-    const seen = this.seenStatus.get(collab.id) ?? { attempts: 0, failures: 0 };
-    const hidePeerNotice = () => {
-      this.peerNotices.get(collab.id)?.hide();
-      this.peerNotices.delete(collab.id);
-    };
+    const session = this.sessions.get(collab);
+    if (!session) return;
+    session.update?.();
     if (collab.peers) {
-      hidePeerNotice();
-      window.clearTimeout(this.failureTimers.get(collab.id));
-      this.failureTimers.delete(collab.id);
-    } else if (status.failures > seen.failures) {
+      clearAlerts(session);
+    } else if (status.failures > session.seen.failures) {
       // Relayed connections take longer to settle than direct ones.
       const turn = !!turnServer(this.settings);
-      window.clearTimeout(this.failureTimers.get(collab.id));
-      this.failureTimers.set(
-        collab.id,
-        window.setTimeout(
-          () => {
-            this.failureTimers.delete(collab.id);
-            if (!this.collabs.has(collab.id) || collab.peers) return;
-            hidePeerNotice();
-            const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
-            new Notice(
-              turn
-                ? `Collab: a peer was found for ${name} but connections keep failing, even with TURN. Test the TURN settings.${why}`
-                : `Collab: a peer was found for ${name} but the connection failed. A TURN server in settings may help.${why}`,
-              12000,
-            );
-          },
-          turn ? 20000 : 8000,
-        ),
+      window.clearTimeout(session.failureTimer);
+      session.failureTimer = window.setTimeout(
+        () => {
+          clearAlerts(session);
+          if (!this.sessions.has(collab) || collab.peers) return;
+          const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
+          new Notice(
+            turn
+              ? `Collab: a peer was found for ${name} but connections keep failing, even with TURN. Test the TURN settings.${why}`
+              : `Collab: a peer was found for ${name} but the connection failed. A TURN server in settings may help.${why}`,
+            12000,
+          );
+        },
+        turn ? 20000 : 8000,
       );
-    } else if (status.attempts > seen.attempts && !this.peerNotices.has(collab.id) && !collab.peers) {
-      this.peerNotices.set(collab.id, new Notice(`Collab: peer found for ${name}, connecting…`, 0));
+    } else if (status.attempts > session.seen.attempts && !session.peerNotice) {
+      session.peerNotice = new Notice(`Collab: peer found for ${name}, connecting…`, 0);
     }
-    this.seenStatus.set(collab.id, { attempts: status.attempts, failures: status.failures });
+    session.seen = status;
     this.updateStatus();
   }
 
   private folderSync(collab: Collab): FolderSync {
-    const sync = new FolderSync(this.app, collab, collab.folder ?? '', () => void this.disconnect(collab));
-    this.folders.set(collab.id, sync);
+    const sync = new FolderSync(this.app, collab, () => void this.disconnect(collab));
+    const session = this.sessions.get(collab);
+    if (session) session.sync = sync;
     return sync;
   }
 
   private async open(invite: Invite, path: string): Promise<Collab> {
-    void this.checkNetwork(false);
+    if (Date.now() - this.natCheckedAt >= 60000) void this.refreshVerdict();
     const collab = new Collab(this.app, invite, path, rtcConfig(this.settings), this.store);
-    collab.onPeers = () => this.updateStatus();
+    collab.onPeers = (count) => new Notice(count ? `Collab: ${plural(count, 'peer')} connected` : 'Collab: no peers connected');
     this.collabs.set(collab.id, collab);
+    this.sessions.set(collab, { seen: collab.status() });
     this.updateStatus();
     await collab.load();
     return collab;
@@ -676,14 +642,10 @@ export default class CollabPlugin extends Plugin {
   }
 
   private async teardown(collab: Collab) {
-    this.folders.get(collab.id)?.dispose();
-    this.folders.delete(collab.id);
-    this.peerNotices.get(collab.id)?.hide();
-    this.peerNotices.delete(collab.id);
-    window.clearTimeout(this.failureTimers.get(collab.id));
-    this.failureTimers.delete(collab.id);
-    this.seenStatus.delete(collab.id);
-    this.statusUpdaters.delete(collab.id);
+    const session = this.sessions.get(collab);
+    this.sessions.delete(collab);
+    session?.sync?.dispose();
+    if (session) clearAlerts(session);
     await collab.disconnect();
   }
 
@@ -704,15 +666,15 @@ export default class CollabPlugin extends Plugin {
     const marker = this.markerOf(folder);
     if (!marker) return;
     const invite = readInvite(this.app, marker);
-    const collab = this.collabOf(folder.isRoot() ? '' : folder.path);
+    const collab = this.collabOf(folderPath(folder));
     if (collab) await this.disconnect(collab);
     await this.app.fileManager.trashFile(marker);
     if (invite) await this.store.remove(invite.id);
-    new Notice(`Collab: ${folder.name || 'the vault'} is no longer shared`);
+    new Notice(`Collab: ${folderName(folder)} is no longer shared`);
   }
 
-  // The clipboard can stall when the window is not focused. Never let that
-  // hold up sharing: the URL is in the property either way.
+  // The clipboard can stall when the window is not focused. Give up after
+  // 3 s: the URL is in the property either way.
   async copy(url: string, name: string) {
     const timeout = new Promise<'timeout'>((resolve) => window.setTimeout(() => resolve('timeout'), 3000));
     try {
@@ -734,15 +696,26 @@ export default class CollabPlugin extends Plugin {
   }
 }
 
-// The kind of network, read off the candidates' network-cost: 999 is
-// cellular, 10 wifi, 0 wired. Several kinds can be up at once.
-function describeNetwork(candidates: string[]): string {
-  const costs = new Set<number>();
-  for (const line of candidates) {
-    const m = /network-cost (\d+)/.exec(line);
-    if (m) costs.add(Number(m[1]));
-  }
-  if (!costs.size) return 'unknown';
-  const names = [...costs].sort((a, b) => a - b).map((c) => (c >= 900 ? 'cellular' : c >= 10 ? 'wifi' : 'wired'));
-  return [...new Set(names)].join(' and ');
+function clearAlerts(session: Session) {
+  session.peerNotice?.hide();
+  session.peerNotice = undefined;
+  window.clearTimeout(session.failureTimer);
+  session.failureTimer = undefined;
+}
+
+// The vault root is '' in a collab and 'the vault' to the user.
+function folderPath(folder: TFolder): string {
+  return folder.isRoot() ? '' : folder.path;
+}
+
+function folderName(folder: TFolder): string {
+  return folder.name || 'the vault';
+}
+
+function collabName(collab: Collab): string {
+  return collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || 'the vault';
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${n === 1 ? word : `${word}s`}`;
 }

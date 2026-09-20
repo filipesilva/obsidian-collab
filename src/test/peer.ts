@@ -2,15 +2,9 @@
 // a test loads this in an iframe for each additional peer and talks to it
 // with postMessage.
 import * as Y from 'yjs';
-import { Provider } from '../network';
+import { Provider, type RoomOptions } from '../network';
 
-interface Config {
-  room: string;
-  secret: string;
-  relays: string[];
-}
-
-const config = (window as unknown as { config: Config }).config;
+const config = (window as unknown as { config: RoomOptions }).config;
 const doc = new Y.Doc();
 const text = doc.getText('t');
 const provider = new Provider(doc, config);

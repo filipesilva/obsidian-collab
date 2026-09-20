@@ -1,48 +1,6 @@
 import { App, Modal, Notice, Setting, TFile, normalizePath } from 'obsidian';
 import type { Invite } from './invite';
 
-export class ConfirmJoin extends Modal {
-  private ok = false;
-  private resolve!: (ok: boolean) => void;
-
-  constructor(
-    app: App,
-    private invite: Invite,
-  ) {
-    super(app);
-  }
-
-  ask(): Promise<boolean> {
-    this.open();
-    return new Promise((resolve) => (this.resolve = resolve));
-  }
-
-  onOpen() {
-    const { contentEl, invite } = this;
-    const what = invite.folder !== undefined ? `the folder "${invite.folder || '/'}"` : `the file "${invite.file}"`;
-    contentEl.createEl('h2', { text: 'Join shared ' + (invite.folder !== undefined ? 'folder' : 'file') });
-    contentEl.createEl('p', {
-      text: `Someone shared ${what}. Your edits go directly to the other peers over WebRTC. Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the content.`,
-    });
-    new Setting(contentEl)
-      .addButton((b) =>
-        b
-          .setButtonText('Join')
-          .setCta()
-          .onClick(() => {
-            this.ok = true;
-            this.close();
-          }),
-      )
-      .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()));
-  }
-
-  onClose() {
-    this.contentEl.empty();
-    this.resolve(this.ok);
-  }
-}
-
 // A yes or no question. Resolves false when dismissed.
 export class Confirm extends Modal {
   private ok = false;
@@ -83,6 +41,17 @@ export class Confirm extends Modal {
     this.contentEl.empty();
     this.resolve(this.ok);
   }
+}
+
+export function confirmJoin(app: App, invite: Invite): Promise<boolean> {
+  const folder = invite.folder !== undefined;
+  const what = folder ? `the folder "${invite.folder || '/'}"` : `the file "${invite.file}"`;
+  return new Confirm(
+    app,
+    `Join shared ${folder ? 'folder' : 'file'}`,
+    `Someone shared ${what}. Your edits go directly to the other peers over WebRTC. Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the content.`,
+    'Join',
+  ).ask();
 }
 
 // Shows gathered diagnostics in a box, with a copy button.

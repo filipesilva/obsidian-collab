@@ -27,8 +27,6 @@ export function memoryStore(): StateStore {
 // snapshot shortly after each change and on stop.
 export class Persistence {
   private timer: number | null = null;
-  private dirty = false;
-  private stopped = false;
 
   constructor(
     private doc: Y.Doc,
@@ -40,28 +38,25 @@ export class Persistence {
   // Resolves whether saved state existed.
   async load(): Promise<boolean> {
     const state = await this.store.read(this.id);
-    if (state) Y.applyUpdate(this.doc, state, this);
+    if (state) Y.applyUpdate(this.doc, state);
     this.doc.on('update', this.onUpdate);
     return state !== null;
   }
 
+  // A pending timer means unsaved changes.
   async flush(): Promise<void> {
-    if (this.timer !== null) window.clearTimeout(this.timer);
+    if (this.timer === null) return;
+    window.clearTimeout(this.timer);
     this.timer = null;
-    if (!this.dirty) return;
-    this.dirty = false;
     await this.store.write(this.id, Y.encodeStateAsUpdate(this.doc));
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
     this.doc.off('update', this.onUpdate);
     await this.flush();
   }
 
-  private onUpdate = (_update: Uint8Array, origin: unknown) => {
-    if (origin === this || this.stopped) return;
-    this.dirty = true;
-    if (this.timer === null) this.timer = window.setTimeout(() => void this.flush(), this.delay);
+  private onUpdate = () => {
+    this.timer ??= window.setTimeout(() => void this.flush(), this.delay);
   };
 }

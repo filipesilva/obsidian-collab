@@ -1,10 +1,10 @@
-import { App, Notice, TFile } from 'obsidian';
+import { App, TFile } from 'obsidian';
 import * as Y from 'yjs';
 import { Invite, inviteUrl } from './invite';
 import { Provider, type Status } from './network';
-import { SharedDoc } from './shared-doc';
+import { SharedDoc, sourceViews } from './shared-doc';
 import { Persistence, type StateStore } from './state';
-import { DocEntry, docs, getText, observeDocs, openDoc } from './sync';
+import { DocEntry, applyContent, docs, getText, observeDocs, openDoc } from './sync';
 
 // A shared file or folder: one Y.Doc, one Trystero room, its saved state,
 // and the shared notes in it keyed by vault path. A file collab holds one
@@ -20,7 +20,11 @@ export class Collab {
   onPeers: ((count: number) => void) | null = null;
   private persistence: Persistence;
   private unobserve: () => void;
-  private waiters = new Set<(ok: boolean) => void>();
+  // Every wait races `closed`, which resolves false on disconnect.
+  private close!: () => void;
+  private closed = new Promise<false>((resolve) => (this.close = () => resolve(false)));
+  private gotSync!: () => void;
+  private firstSync = new Promise<true>((resolve) => (this.gotSync = () => resolve(true)));
 
   constructor(
     private app: App,
@@ -51,23 +55,21 @@ export class Collab {
     return this.folder === '' || path === this.folder || path.startsWith(`${this.folder}/`);
   }
 
-  async load(): Promise<boolean> {
+  async load(): Promise<void> {
     this.hasState = await this.persistence.load();
-    return this.hasState;
   }
 
-  connect(onStatus?: (status: Status) => void): void {
+  connect(onStatus: (status: Status) => void): void {
     const { relays, id, secret } = this.invite;
     this.provider = new Provider(this.ydoc, { relays, room: id, secret, rtc: this.rtc });
-    this.provider.onStatus = onStatus ?? null;
+    this.provider.onStatus = onStatus;
     this.provider.onPeers = (count) => {
-      new Notice(count ? `Collab: ${count} ${count === 1 ? 'peer' : 'peers'} connected` : 'Collab: no peers connected');
-      onStatus?.(this.status());
+      onStatus(this.status());
       this.onPeers?.(count);
     };
-    this.provider.onSynced = () => this.settle('synced', true);
+    this.provider.onSynced = this.gotSync;
     // Relay sockets outlive collabs, so some may be open already.
-    onStatus?.(this.status());
+    onStatus(this.status());
   }
 
   status(): Status {
@@ -78,11 +80,11 @@ export class Collab {
     return this.provider?.peers.length ?? 0;
   }
 
-  // Whether any relay answered, so others can find us. False on timeout or
-  // disconnect.
+  // Whether any relay answered, so others can find us. A sync proves it too.
+  // False on timeout or disconnect.
   waitReachable(): Promise<boolean> {
     if (!this.provider) return Promise.resolve(false);
-    return Promise.race([this.provider.reachable, new Promise<boolean>((resolve) => this.waiters.add(resolve))]);
+    return Promise.race([this.provider.reachable, this.firstSync, this.closed]);
   }
 
   describeConnections(): Promise<string[]> {
@@ -115,30 +117,20 @@ export class Collab {
   // is online.
   waitFor(id: string): Promise<boolean> {
     if (this.has(id)) return Promise.resolve(true);
-    return new Promise((resolve) => {
-      const stop = observeDocs(this.ydoc, (changed) => {
-        if (changed !== id || !this.has(id)) return;
-        stop();
-        this.waiters.delete(done);
-        resolve(true);
+    let stop = () => {};
+    const arrived = new Promise<true>((resolve) => {
+      stop = observeDocs(this.ydoc, () => {
+        if (this.has(id)) resolve(true);
       });
-      const done = (ok: boolean) => {
-        stop();
-        resolve(ok);
-      };
-      this.waiters.add(done);
     });
+    const done = Promise.race([arrived, this.closed]);
+    void done.then(stop);
+    return done;
   }
 
   // Resolves true at the first full sync with any peer, false on disconnect.
   waitSynced(): Promise<boolean> {
-    if (this.provider?.synced) return Promise.resolve(true);
-    return new Promise((resolve) => this.waiters.add(resolve));
-  }
-
-  private settle(_why: string, ok: boolean) {
-    for (const done of this.waiters) done(ok);
-    this.waiters.clear();
+    return Promise.race([this.firstSync, this.closed]);
   }
 
   // Creates the doc from the file. Only sharing does this: a doc seeded by
@@ -152,11 +144,11 @@ export class Collab {
   // file's offline edits are diffed in; without it the shared text replaces
   // the file.
   async attach(file: TFile, id: string): Promise<SharedDoc> {
+    const content = this.hasState ? await this.app.vault.read(file) : null;
     const text = getText(this.ydoc, id);
     if (!text) throw new Error(`collab: no doc ${id}`);
-    if (!this.hasState) return this.track(file, new SharedDoc(this.app, file, id, text, true));
-    const content = await this.app.vault.read(file);
-    return this.track(file, new SharedDoc(this.app, file, id, openDoc(this.ydoc, { id, path: file.path, content })));
+    if (content !== null) applyContent(text, content);
+    return this.track(file, new SharedDoc(this.app, file, id, text, !this.hasState));
   }
 
   private track(file: TFile, doc: SharedDoc): SharedDoc {
@@ -193,17 +185,18 @@ export class Collab {
   }
 
   rebindAll(): void {
-    for (const doc of this.docs.values()) doc.rebind();
+    const open = sourceViews(this.app);
+    for (const doc of this.docs.values()) doc.rebind(open);
   }
 
   async disconnect(): Promise<void> {
     for (const doc of this.docs.values()) doc.destroy();
     this.docs.clear();
-    this.settle('disconnect', false);
+    this.close();
     this.unobserve();
-    await this.provider?.destroy();
+    // The snapshot is taken now, while it matches what the notes last saw.
+    await Promise.all([this.provider?.destroy(), this.persistence.stop()]);
     this.provider = null;
-    await this.persistence.stop();
     this.ydoc.destroy();
   }
 

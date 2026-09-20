@@ -1,4 +1,5 @@
 import { getRelaySockets } from 'trystero';
+import { pickRelays } from './network';
 
 // Whether this network can take a direct connection, judged from what STUN
 // reports. One peer connection asks every STUN server from one local
@@ -20,89 +21,76 @@ export async function checkNat(stun: string[], online: () => Promise<boolean>, t
   return { online: isOnline || reachable, reachable, symmetric, needsTurn: isOnline && !reachable };
 }
 
-// Mapped ports seen per public address.
-function gather(stun: string[], timeout: number): Promise<Map<string, Set<number>>> {
-  const ports = new Map<string, Set<number>>();
-  if (!stun.length) return Promise.resolve(ports);
-  return new Promise((resolve) => {
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: stun }] });
-    const done = () => {
-      window.clearTimeout(timer);
-      pc.close();
-      resolve(ports);
-    };
-    const timer = window.setTimeout(done, timeout);
-    pc.onicecandidate = ({ candidate }) => {
-      if (!candidate) return done();
-      const parsed = parseCandidate(candidate.candidate);
-      if (!parsed || parsed.type !== 'srflx') return;
-      const set = ports.get(parsed.address) ?? new Set();
-      set.add(parsed.port);
-      ports.set(parsed.address, set);
-    };
-    pc.createDataChannel('nat');
-    pc.createOffer()
-      .then((offer) => pc.setLocalDescription(offer))
-      .catch(done);
-  });
-}
-
-// Every ICE candidate a configuration yields, as SDP lines, for diagnostics.
-export function listCandidates(rtc: RTCConfiguration, timeout = 6000): Promise<string[]> {
-  const lines: string[] = [];
+// Hands each ICE candidate line of a throwaway connection to `each`, until
+// gathering ends, `each` returns true, or the timeout.
+function gatherCandidates(
+  rtc: RTCConfiguration,
+  timeout: number,
+  each: (line: string) => boolean | void,
+  problem: (text: string) => void = () => {},
+): Promise<void> {
   return new Promise((resolve) => {
     let pc: RTCPeerConnection;
     try {
       pc = new RTCPeerConnection(rtc);
     } catch (e) {
-      return resolve([`error: ${String(e)}`]);
+      problem(`error: ${String(e)}`);
+      return resolve();
     }
     const done = () => {
       window.clearTimeout(timer);
       pc.close();
-      resolve(lines);
+      resolve();
     };
     const timer = window.setTimeout(done, timeout);
     pc.onicecandidate = ({ candidate }) => {
-      if (!candidate) return done();
-      lines.push(candidate.candidate.replace(/^candidate:\S+ /, ''));
+      if (!candidate || each(candidate.candidate)) done();
     };
-    pc.onicecandidateerror = (e) => lines.push(`error ${String(e.errorCode)} ${e.errorText} ${e.url}`);
-    pc.createDataChannel('diag');
+    pc.onicecandidateerror = (e) => problem(`error ${String(e.errorCode)} ${e.errorText} ${e.url}`);
+    pc.createDataChannel('probe');
     pc.createOffer()
       .then((offer) => pc.setLocalDescription(offer))
       .catch((e: unknown) => {
-        lines.push(`error: ${String(e)}`);
+        problem(`error: ${String(e)}`);
         done();
       });
   });
 }
 
+// Mapped ports seen per public address.
+async function gather(stun: string[], timeout: number): Promise<Map<string, Set<number>>> {
+  const ports = new Map<string, Set<number>>();
+  if (!stun.length) return ports;
+  await gatherCandidates({ iceServers: [{ urls: stun }] }, timeout, (line) => {
+    const parsed = parseCandidate(line);
+    if (!parsed || parsed.type !== 'srflx') return;
+    const set = ports.get(parsed.address) ?? new Set();
+    set.add(parsed.port);
+    ports.set(parsed.address, set);
+  });
+  return ports;
+}
+
+// Every ICE candidate a configuration yields, as SDP lines, for diagnostics.
+export async function listCandidates(rtc: RTCConfiguration, timeout = 6000): Promise<string[]> {
+  const lines: string[] = [];
+  await gatherCandidates(
+    rtc,
+    timeout,
+    (line) => {
+      lines.push(line.replace(/^candidate:\S+ /, ''));
+    },
+    (text) => lines.push(text),
+  );
+  return lines;
+}
+
 // Whether a TURN server accepts these credentials: asks it for a relay
 // allocation and waits for the relay candidate.
-export function checkTurn(server: RTCIceServer, timeout = 5000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let pc: RTCPeerConnection;
-    try {
-      pc = new RTCPeerConnection({ iceServers: [server], iceTransportPolicy: 'relay' });
-    } catch {
-      return resolve(false);
-    }
-    const done = (ok: boolean) => {
-      window.clearTimeout(timer);
-      pc.close();
-      resolve(ok);
-    };
-    const timer = window.setTimeout(() => done(false), timeout);
-    pc.onicecandidate = ({ candidate }) => {
-      if (!candidate) return done(false);
-      if (parseCandidate(candidate.candidate)?.type === 'relay') done(true);
-    };
-    pc.createDataChannel('turn');
-    pc.createOffer()
-      .then((offer) => pc.setLocalDescription(offer))
-      .catch(() => done(false));
-  });
+export async function checkTurn(server: RTCIceServer, timeout = 5000): Promise<boolean> {
+  let ok = false;
+  await gatherCandidates({ iceServers: [server], iceTransportPolicy: 'relay' }, timeout, (line) => (ok = parseCandidate(line)?.type === 'relay'));
+  return ok;
 }
 
 // The SDP line, since not every browser fills in the candidate's fields:
@@ -118,12 +106,20 @@ export function parseCandidate(line: string): { address: string; port: number; t
 // relay in the list costs nothing beyond this probe. Probes run in batches
 // so a long list does not open every socket at once.
 export async function liveRelays(urls: string[], count: number, timeout = 4000): Promise<string[]> {
-  const pool = [...urls].sort(() => Math.random() - 0.5);
+  const pool = pickRelays(urls, urls.length);
   const live: string[] = [];
   for (let i = 0; i < pool.length && live.length < count; i += count * 2) {
     const batch = pool.slice(i, i + count * 2);
-    const answered = await Promise.all(batch.map((url) => answers(url, timeout)));
-    for (const [j, ok] of answered.entries()) if (ok && live.length < count) live.push(batch[j]!);
+    // Done once enough have answered: a silent relay must not hold up the rest.
+    await new Promise<void>((resolve) => {
+      let pending = batch.length;
+      for (const url of batch) {
+        void answers(url, timeout).then((ok) => {
+          if (ok && live.length < count) live.push(url);
+          if (--pending === 0 || live.length >= count) resolve();
+        });
+      }
+    });
   }
   return live;
 }

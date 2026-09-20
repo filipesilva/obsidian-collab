@@ -4,13 +4,19 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import type * as Y from 'yjs';
 
-export const APP_ID = 'obsidian-collab';
+const APP_ID = 'obsidian-collab';
 export const RELAY_COUNT = 5;
-const RELAY_PROBE_MS = 4000;
-const RELAY_CHECK_INTERVAL_MS = 30000;
-const ALONE_INTERVAL_MS = 10000;
-const PEER_PING_TIMEOUT_MS = 5000;
-const REACHABLE_TIMEOUT_MS = 10000;
+// Waits and intervals in ms. The network tests shorten them.
+export const TIMING = {
+  // How long a relay or a peer may take to answer.
+  relayProbe: 4000,
+  peerPing: 5000,
+  // The upkeep tick, with peers and alone.
+  relayCheck: 30000,
+  alone: 10000,
+  // How long to wait for any relay before saying none is reachable.
+  reachable: 10000,
+};
 export const DEFAULT_RELAYS: string[] = defaultRelayUrls;
 export const DEFAULT_STUN = [
   'stun:stun.l.google.com:19302',
@@ -24,6 +30,7 @@ export interface RoomOptions {
   secret: string;
   relays: string[];
   rtc?: RTCConfiguration;
+  timing?: Partial<typeof TIMING>;
 }
 
 // Every peer must dial the same relays to meet, so the host picks a few and
@@ -59,13 +66,14 @@ export class Provider {
   // Every peer connection Trystero created and has not closed, pool included.
   private pcs = new Set<RTCPeerConnection>();
   private destroyed = false;
+  private unlisten = new AbortController();
   private resolveReachable!: (ok: boolean) => void;
   // Whether any relay answered. Settled by the first reply, or the timeout.
   readonly reachable: Promise<boolean>;
   private checkTimer = 0;
   private attemptsAtLastTick = 0;
-  private rtcConfig: RTCConfiguration;
-  synced = false;
+  private timing: typeof TIMING;
+  private synced = false;
   onPeers: ((count: number) => void) | null = null;
   onSynced: (() => void) | null = null;
   onStatus: ((status: Status) => void) | null = null;
@@ -74,18 +82,22 @@ export class Provider {
     private doc: Y.Doc,
     private opts: RoomOptions,
   ) {
-    this.rtcConfig = opts.rtc ?? { iceServers: [] };
+    this.timing = { ...TIMING, ...opts.timing };
     this.reachable = new Promise((resolve) => (this.resolveReachable = resolve));
-    window.setTimeout(() => this.resolveReachable(false), REACHABLE_TIMEOUT_MS);
+    window.setTimeout(() => this.resolveReachable(false), this.timing.reachable);
     this.join();
     // Probe each relay as it opens, then every so often.
     for (const socket of this.relaySockets()) {
       if (socket.readyState === WebSocket.OPEN) void this.probe(socket);
       else {
-        socket.addEventListener('open', () => {
-          this.emitStatus();
-          void this.probe(socket);
-        });
+        socket.addEventListener(
+          'open',
+          () => {
+            this.emitStatus();
+            void this.probe(socket);
+          },
+          { once: true, signal: this.unlisten.signal },
+        );
       }
     }
     this.schedule();
@@ -110,38 +122,17 @@ export class Provider {
     for (const pc of this.pcs) {
       const key = `${pc.signalingState}/${pc.iceGatheringState}/${pc.iceConnectionState}`;
       states.set(key, (states.get(key) ?? 0) + 1);
-      const stats = await pc.getStats();
-      let relay = false;
-      stats.forEach((report: Record<string, unknown>) => {
-        if (report.type !== 'local-candidate') return;
-        const type = String(report.candidateType);
-        local.set(type, (local.get(type) ?? 0) + 1);
-        if (type === 'relay') relay = true;
-      });
-      if (relay) withRelay++;
+      const stats = await iceStats(pc);
+      for (const [type, n] of stats.local) local.set(type, (local.get(type) ?? 0) + n);
+      if (stats.local.has('relay')) withRelay++;
     }
     out.push(
-      `pool ${this.pcs.size} connections, ${withRelay} with a relay candidate, local candidates ${[...local].map(([t, n]) => `${t}:${n}`).join(',') || 'none'}, states ${[...states].map(([k, n]) => `${k}:${n}`).join(' ')}`,
+      `pool ${this.pcs.size} connections, ${withRelay} with a relay candidate, local candidates ${tally(local) || 'none'}, states ${tally(states, ' ')}`,
     );
     for (const [id, pc] of Object.entries(this.room.getPeers())) {
-      const stats = await pc.getStats();
-      const byId = new Map<string, Record<string, unknown>>();
-      stats.forEach((report: Record<string, unknown>) => byId.set(String(report.id), report));
-      const pairs: string[] = [];
-      const local = new Map<string, number>();
-      stats.forEach((report: Record<string, unknown>) => {
-        if (report.type === 'local-candidate') {
-          const type = String(report.candidateType);
-          local.set(type, (local.get(type) ?? 0) + 1);
-        }
-        if (report.type !== 'candidate-pair') return;
-        const l = byId.get(String(report.localCandidateId));
-        const r = byId.get(String(report.remoteCandidateId));
-        pairs.push(`${String(l?.candidateType)}>${String(r?.candidateType)}=${String(report.state)}${report.nominated ? '*' : ''}`);
-      });
-      out.push(
-        `peer ${id.slice(0, 6)} ice=${pc.iceConnectionState} conn=${pc.connectionState} local=${[...local].map(([t, n]) => `${t}:${n}`).join(',')} pairs=${pairs.join(' ')}`,
-      );
+      const { local, pairs } = await iceStats(pc);
+      const described = pairs.map((p) => `${p.local}>${p.remote}=${p.state}${p.nominated ? '*' : ''}`);
+      out.push(`peer ${id.slice(0, 6)} ice=${pc.iceConnectionState} conn=${pc.connectionState} local=${tally(local)} pairs=${described.join(' ')}`);
     }
     return out;
   }
@@ -150,17 +141,8 @@ export class Provider {
   async paths(): Promise<string[]> {
     const out: string[] = [];
     for (const pc of Object.values(this.room.getPeers())) {
-      const stats = await pc.getStats();
-      const byId = new Map<string, Record<string, unknown>>();
-      stats.forEach((report: Record<string, unknown>) => byId.set(String(report.id), report));
-      let path = 'connecting';
-      stats.forEach((report: Record<string, unknown>) => {
-        if (report.type !== 'candidate-pair' || report.state !== 'succeeded' || !report.nominated) return;
-        const local = byId.get(String(report.localCandidateId));
-        const remote = byId.get(String(report.remoteCandidateId));
-        path = local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'relay' : 'direct';
-      });
-      out.push(path);
+      const won = (await iceStats(pc)).pairs.filter((p) => p.state === 'succeeded' && p.nominated).pop();
+      out.push(!won ? 'connecting' : won.local === 'relay' || won.remote === 'relay' ? 'relay' : 'direct');
     }
     return out;
   }
@@ -172,12 +154,10 @@ export class Provider {
 
   // Relay sockets outlive rooms and can look open while dead, for example
   // after the app was in the background on a phone. Probe each open one
-  // with a subscription a live relay answers at once. Close any that stays
-  // silent so Trystero reconnects it, then rejoin, because only a fresh
-  // join announces at once.
-  // Closing a dead socket makes Trystero reconnect it. Only a fresh join
-  // announces at once, but rejoining drops every peer, so that happens
-  // only while there is nobody to lose.
+  // with a subscription a live relay answers at once, and close any that
+  // stays silent so Trystero reconnects it. Only a fresh join announces at
+  // once, but rejoining drops every peer, so that happens only while there
+  // is nobody to lose.
   checkRelays(): void {
     const open = this.relaySockets().filter((socket) => socket.readyState === WebSocket.OPEN);
     void Promise.all(open.map((socket) => this.probe(socket))).then((alive) => {
@@ -193,14 +173,13 @@ export class Provider {
   // announce a relay lost or a handshake that missed: Trystero's own next
   // announce is a minute away.
   private schedule() {
-    this.checkTimer = window.setTimeout(() => void this.tick(), this.peers.length ? RELAY_CHECK_INTERVAL_MS : ALONE_INTERVAL_MS);
+    this.checkTimer = window.setTimeout(() => void this.tick(), this.peers.length ? this.timing.relayCheck : this.timing.alone);
   }
 
   private async tick(): Promise<void> {
     if (this.destroyed) return;
-    const { attempts } = this.status();
-    const idle = !this.peers.length && !this.peerIds.size && attempts === this.attemptsAtLastTick;
-    this.attemptsAtLastTick = attempts;
+    const idle = !this.peers.length && !this.peerIds.size && this.attempts === this.attemptsAtLastTick;
+    this.attemptsAtLastTick = this.attempts;
     if (idle) await this.rejoin();
     else {
       this.checkRelays();
@@ -234,7 +213,7 @@ export class Provider {
     };
     const answers = await Promise.all(
       this.peers.map((id) =>
-        Promise.race([ping(id), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), PEER_PING_TIMEOUT_MS))]),
+        Promise.race([ping(id), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), this.timing.peerPing))]),
       ),
     );
     if (this.destroyed || answers.every(Boolean)) return;
@@ -257,7 +236,7 @@ export class Provider {
         resolve(ok);
       };
       const onMessage = () => done(true);
-      const timer = window.setTimeout(() => done(false), RELAY_PROBE_MS);
+      const timer = window.setTimeout(() => done(false), this.timing.relayProbe);
       socket.addEventListener('message', onMessage);
       socket.send(JSON.stringify(['REQ', id, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [id] }]));
     });
@@ -265,6 +244,7 @@ export class Provider {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    this.unlisten.abort();
     window.clearTimeout(this.checkTimer);
     this.doc.off('update', this.onUpdate);
     await this.room.leave().catch(() => {});
@@ -298,7 +278,7 @@ export class Provider {
         appId: APP_ID,
         password: this.opts.secret,
         relayConfig: { urls: this.opts.relays },
-        rtcConfig: this.rtcConfig,
+        rtcConfig: this.opts.rtc ?? { iceServers: [] },
         rtcPolyfill: ObservedPeerConnection,
       },
       this.opts.room,
@@ -375,6 +355,32 @@ class Received {
     readonly provider: Provider,
     readonly from: string,
   ) {}
+}
+
+interface IceStats {
+  local: Map<string, number>;
+  pairs: { local: string; remote: string; state: string; nominated: boolean }[];
+}
+
+// Local candidate types with counts, and every candidate pair, of one connection.
+async function iceStats(pc: RTCPeerConnection): Promise<IceStats> {
+  const byId = new Map<string, Record<string, unknown>>();
+  (await pc.getStats()).forEach((report: Record<string, unknown>) => byId.set(String(report.id), report));
+  const typeOf = (id: unknown) => String(byId.get(String(id))?.candidateType);
+  const local = new Map<string, number>();
+  const pairs: IceStats['pairs'] = [];
+  for (const report of byId.values()) {
+    const type = String(report.candidateType);
+    if (report.type === 'local-candidate') local.set(type, (local.get(type) ?? 0) + 1);
+    if (report.type === 'candidate-pair') {
+      pairs.push({ local: typeOf(report.localCandidateId), remote: typeOf(report.remoteCandidateId), state: String(report.state), nominated: !!report.nominated });
+    }
+  }
+  return { local, pairs };
+}
+
+function tally(counts: Map<string, number>, separator = ','): string {
+  return [...counts].map(([key, n]) => `${key}:${n}`).join(separator);
 }
 
 function toBytes(data: unknown): Uint8Array {

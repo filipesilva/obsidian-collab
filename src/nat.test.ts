@@ -82,7 +82,7 @@ describe('with the local TURN server', () => {
   });
 
   it('checkNat sees the local STUN answer', { timeout: 15000 }, async () => {
-    const check = await checkNat(['stun:localhost:3479'], yes, 8000);
+    const check = await checkNat(['stun:localhost:3479'], yes, 3000);
     expect(check.reachable).toBe(true);
   });
 });
