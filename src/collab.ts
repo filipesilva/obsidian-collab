@@ -1,4 +1,6 @@
 import { App, TFile } from 'obsidian';
+import { toHexString } from 'lib0/buffer';
+import { digest } from 'lib0/hash/sha256';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { Invite, inviteUrl } from './invite';
@@ -73,7 +75,7 @@ export class Collab {
 
   connect(onStatus: (status: Status) => void): void {
     const { relays, id, secret } = this.invite;
-    this.provider = new Provider(this.ydoc, { relays, room: id, secret, rtc: this.rtc }, this.awareness);
+    this.provider = new Provider(this.ydoc, { relays, room: roomName(id, secret), secret, rtc: this.rtc }, this.awareness);
     this.provider.onStatus = onStatus;
     this.provider.onPeers = (count) => {
       onStatus(this.status());
@@ -239,4 +241,12 @@ export class Collab {
     doc.destroy();
     this.docs.set(doc.file.path, new SharedDoc(this.app, doc.file, id, ytext, this.awareness, true));
   }
+}
+
+// The Trystero room. Trystero tells rooms apart by name alone and uses the
+// password only to encrypt signalling, so the secret goes into the name: a
+// regenerated URL is then a different room, unreachable with the old one
+// and free of the old room's connection state.
+function roomName(id: string, secret: string): string {
+  return toHexString(digest(new TextEncoder().encode(`${id}:${secret}`)));
 }

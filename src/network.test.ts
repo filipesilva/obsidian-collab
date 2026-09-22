@@ -88,6 +88,10 @@ class Peer {
     this.iframe.contentWindow?.postMessage({ type: 'name', data }, '*');
   }
 
+  rejoin(room: string, secret: string) {
+    this.iframe.contentWindow?.postMessage({ type: 'rejoin', room, secret }, '*');
+  }
+
   async leave() {
     this.iframe.contentWindow?.postMessage({ type: 'leave' }, '*');
     await new Promise((r) => setTimeout(r, 500));
@@ -211,6 +215,37 @@ describe('Provider', () => {
     await until(() => me.provider.awareness.getStates().size === 1, 'the peer state outlived the peer', 10000);
     await me.provider.destroy();
   });
+
+  // A regenerated URL moves both peers to a new room. Trystero keeps the
+  // peer connection between them and multiplexes rooms over it, so the
+  // new room reuses it.
+  for (const gap of [0, 1500]) {
+    it(`syncs in a new room after both leave, peer rejoining ${gap} ms later`, { timeout: 60000 }, async () => {
+      const config = newConfig(LOCAL_RELAYS);
+      const me = local(config);
+      const peer = new Peer(config);
+      try {
+        await peer.waitText((t) => t === 'hello');
+        await until(() => me.provider.peers.length === 1, 'never connected');
+        const next = { room: crypto.randomUUID(), secret: crypto.randomUUID() };
+        await me.provider.destroy();
+        const again = new Provider(me.doc, { ...config, ...next });
+        try {
+          await new Promise((r) => setTimeout(r, gap));
+          me.text.insert(me.text.length, ' +me');
+          peer.rejoin(next.room, next.secret);
+          peer.insert(' +peer');
+          await until(() => again.peers.length === 1 && peer.peers === 1, 'never reconnected', 20000);
+          expect(await peer.waitText((t) => t.includes('+me'))).toContain('+me');
+          expect(await me.waitText((t) => t.includes('+peer'))).toContain('+peer');
+        } finally {
+          await again.destroy();
+        }
+      } finally {
+        await peer.leave();
+      }
+    });
+  }
 
   it('leaves a healthy relay socket alone when checked', { timeout: 40000 }, async () => {
     const sockets = getRelaySockets as () => Record<string, WebSocket>;

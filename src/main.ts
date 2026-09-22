@@ -6,7 +6,7 @@ import { FolderSync } from './folder';
 import { readInvite, readUrl, removeUrl, writeUrl } from './frontmatter';
 import { MARKER, findById, markerPath } from './identity';
 import { Invite, inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
-import { AskUrl, Confirm, ShowText, confirmJoin, createNote } from './join';
+import { AskUrl, Confirm, ShowText, confirmJoin, confirmRegenerate, createNote } from './join';
 import { checkTurn, describeNat, liveRelays } from './nat';
 import { RELAY_COUNT, type Status } from './network';
 import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
@@ -85,8 +85,8 @@ export default class CollabPlugin extends Plugin {
       },
     });
     this.addCommand({
-      id: 'join-url',
-      name: 'Join URL',
+      id: 'open-url',
+      name: 'Open collab URL',
       callback: () => void this.joinUrl(),
     });
     this.addCommand({
@@ -129,6 +129,28 @@ export default class CollabPlugin extends Plugin {
         const url = folder && this.folderUrl(folder);
         if (!url) return false;
         if (!checking) void this.copy(url, folderName(folder));
+        return true;
+      },
+    });
+    this.addCommand({
+      id: 'regenerate-file-url',
+      name: 'Regenerate file URL',
+      checkCallback: (checking) => {
+        const file = activeFile();
+        const invite = file && fileInvite(file);
+        if (!file || !invite) return false;
+        if (!checking) void this.regenerateFile(file, invite);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: 'regenerate-folder-url',
+      name: 'Regenerate folder URL',
+      checkCallback: (checking) => {
+        const folder = sharedFolder();
+        const invite = folder && this.folderInvite(folder);
+        if (!folder || !invite) return false;
+        if (!checking) void this.regenerateFolder(folder, invite);
         return true;
       },
     });
@@ -268,6 +290,8 @@ export default class CollabPlugin extends Plugin {
       }
       const url = this.folderUrl(folder);
       if (url) menu.addItem((item) => item.setTitle('Copy folder URL').setIcon('link').onClick(() => void this.copy(url, folderName(folder))));
+      const invite = this.folderInvite(folder);
+      if (invite) menu.addItem((item) => item.setTitle('Regenerate folder URL').setIcon('refresh-cw').onClick(() => void this.regenerateFolder(folder, invite)));
       menu.addItem((item) => item.setTitle('Stop sharing folder').setIcon('x').onClick(() => void this.stopSharingFolder(folder)));
     } else if (!this.sharedFolderOf(folder) && !this.containsShared(folder)) {
       menu.addItem((item) => item.setTitle('Share folder').setIcon('users').onClick(() => void this.shareFolder(folder)));
@@ -339,7 +363,7 @@ export default class CollabPlugin extends Plugin {
 
   // Picks relays that answer right now. The URL carries them, so a dead
   // one would burden every join forever.
-  private async newInvite(): Promise<Invite | null> {
+  private async newInvite(id = randomId()): Promise<Invite | null> {
     if (!this.settings.relays.length) {
       new Notice('Collab: add a signalling server in settings first');
       return null;
@@ -355,7 +379,53 @@ export default class CollabPlugin extends Plugin {
       new Notice('Collab: no signalling server answered. Check the network and the list in settings.', 10000);
       return null;
     }
-    return { relays, id: randomId(), secret: randomId(16) };
+    return { relays, id, secret: randomId(16) };
+  }
+
+  // A new URL for a share: fresh relays and a new secret under the same
+  // id, so its saved state and its notes carry over. Everyone needs the
+  // new URL, and the old one stops working.
+  async regenerateFile(file: TFile, old: Invite, confirmed = false) {
+    if (!confirmed && !(await confirmRegenerate(this.app, old))) return;
+    const invite = await this.newInvite(old.id);
+    if (!invite) return;
+    invite.file = old.file;
+    void this.copy(inviteUrl(invite), file.basename);
+    await this.adoptFile(file, invite, true);
+  }
+
+  async regenerateFolder(folder: TFolder, old: Invite, confirmed = false) {
+    if (!confirmed && !(await confirmRegenerate(this.app, old))) return;
+    const invite = await this.newInvite(old.id);
+    if (!invite) return;
+    invite.folder = old.folder;
+    void this.copy(inviteUrl(invite), folderName(folder));
+    await this.adoptFolder(folder, invite);
+  }
+
+  // Connects a share with a new URL, in place of any connection made with
+  // the old one. The property is part of the shared text, so only the side
+  // that made the URL writes it: sync carries it to the others. Written
+  // on both sides, the same offline edit would merge doubled. With history
+  // the note is bound once connected and the write is a shared edit; a
+  // write before binding could lose to an editor not yet reloaded from
+  // disk. Without history the text a peer sends replaces the note anyway.
+  private async adoptFile(file: TFile, invite: Invite, write: boolean) {
+    const current = this.collabs.get(invite.id);
+    if (current) await this.disconnect(current);
+    const url = inviteUrl(invite);
+    const before = write && (await this.store.read(invite.id)) === null;
+    if (before) await writeUrl(this.app, file, url);
+    await this.connectFile(file, invite);
+    if (write && !before && this.collabs.has(invite.id)) await writeUrl(this.app, file, url);
+  }
+
+  // The marker is not a shared doc, so every side stores it.
+  private async adoptFolder(folder: TFolder, invite: Invite) {
+    const current = this.collabs.get(invite.id);
+    if (current) await this.disconnect(current);
+    await this.writeMarker(folderPath(folder), inviteUrl(invite));
+    await this.connectFolder(folder, invite);
   }
 
   // Sharing is the only way a doc gets created.
@@ -399,14 +469,14 @@ export default class CollabPlugin extends Plugin {
     else new Notice('Collab: that is not a collab URL');
   }
 
-  // First time in from someone else's URL: creates the file or folder with
-  // the property, then connects.
+  // Someone else's URL. The first time, creates the file or folder with the
+  // property and connects. For a share already here, the URL replaces the
+  // stored one: that is how a regenerated URL gets in.
   async join(invite: Invite, confirmed: boolean) {
-    if (this.collabs.has(invite.id)) {
+    if (this.collabs.get(invite.id)?.url === inviteUrl(invite)) {
       new Notice('Collab: already connected');
       return;
     }
-    if (!confirmed && !(await confirmJoin(this.app, invite))) return;
     if (invite.folder === undefined) {
       // A note with this id may already be here from an earlier join.
       const known = findById(
@@ -414,9 +484,10 @@ export default class CollabPlugin extends Plugin {
         invite.id,
       );
       const existing = known && this.app.vault.getFileByPath(known.path);
+      if (!confirmed && !(await confirmJoin(this.app, invite, !!existing))) return;
       if (existing) {
         await this.app.workspace.getLeaf(false).openFile(existing);
-        await this.connectFile(existing, invite);
+        await this.adoptFile(existing, invite, false);
         return;
       }
       // A fresh join has no history by definition.
@@ -429,14 +500,14 @@ export default class CollabPlugin extends Plugin {
     }
     const path = invite.folder;
     const existing = path ? this.app.vault.getFolderByPath(path) : this.app.vault.getRoot();
+    const known = !!existing && this.folderInvite(existing)?.id === invite.id;
+    if (!confirmed && !(await confirmJoin(this.app, invite, known))) return;
     if (existing) {
-      const marker = this.markerOf(existing);
-      const there = marker && readInvite(this.app, marker);
-      if (there?.id !== invite.id) {
+      if (!known) {
         new Notice(`Collab: "${path || '/'}" already exists. Move it away first, the shared folder must use that path.`, 10000);
         return;
       }
-      await this.connectFolder(existing);
+      await this.adoptFolder(existing, invite);
       return;
     }
     await this.store.remove(invite.id);
@@ -644,6 +715,11 @@ export default class CollabPlugin extends Plugin {
     this.updateStatus();
     await collab.load();
     return collab;
+  }
+
+  private folderInvite(folder: TFolder): Invite | null {
+    const marker = this.markerOf(folder);
+    return marker ? readInvite(this.app, marker) : null;
   }
 
   private async writeMarker(folder: string, url: string) {

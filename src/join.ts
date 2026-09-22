@@ -43,14 +43,29 @@ export class Confirm extends Modal {
   }
 }
 
-export function confirmJoin(app: App, invite: Invite): Promise<boolean> {
-  const folder = invite.folder !== undefined;
-  const what = folder ? `the folder "${invite.folder || '/'}"` : `the file "${invite.file}"`;
+function describe(invite: Invite): { kind: string; what: string } {
+  const kind = invite.folder !== undefined ? 'folder' : 'file';
+  const what = invite.folder !== undefined ? `the folder "${invite.folder || '/'}"` : `the file "${invite.file}"`;
+  return { kind, what };
+}
+
+// With known, the share is already here and the URL replaces its stored one.
+export function confirmJoin(app: App, invite: Invite, known = false): Promise<boolean> {
+  const { kind, what } = describe(invite);
+  const relays = `Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the content.`;
+  if (known) {
+    return new Confirm(app, `Update shared ${kind} URL`, `This URL is for ${what}, which is already shared here. It replaces the stored one and connects with it. ${relays}`, 'Update').ask();
+  }
+  return new Confirm(app, `Join shared ${kind}`, `Someone shared ${what}. Your edits go directly to the other peers over WebRTC. ${relays}`, 'Join').ask();
+}
+
+export function confirmRegenerate(app: App, invite: Invite): Promise<boolean> {
+  const { kind, what } = describe(invite);
   return new Confirm(
     app,
-    `Join shared ${folder ? 'folder' : 'file'}`,
-    `Someone shared ${what}. Your edits go directly to the other peers over WebRTC. Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the content.`,
-    'Join',
+    `Regenerate ${kind} URL`,
+    `Makes a new URL for ${what}, with fresh signalling servers and a new secret. The old one stops working. Everyone else pastes the new URL into Open collab URL, or opens it, and it replaces theirs. Their notes and edits carry over.`,
+    'Regenerate',
   ).ask();
 }
 
@@ -95,7 +110,7 @@ export class AskUrl extends Modal {
 
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl('h2', { text: 'Join URL' });
+    contentEl.createEl('h2', { text: 'Open collab URL' });
     let value = '';
     const submit = () => {
       this.url = value;
@@ -109,7 +124,7 @@ export class AskUrl extends Modal {
       window.setTimeout(() => text.inputEl.focus());
     });
     new Setting(contentEl)
-      .addButton((b) => b.setButtonText('Join').setCta().onClick(submit))
+      .addButton((b) => b.setButtonText('Open').setCta().onClick(submit))
       .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()));
   }
 

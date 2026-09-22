@@ -24,7 +24,7 @@ doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values()][0].docs.
 - Share a file in one vault. It gets a `collab-url` property, the URL is on
   the clipboard, and `state/<collab id>.yjs` appears in the plugin folder.
 - Join from another vault with the URL, by the protocol handler and by the
-  **Join URL** command. A new note is created with the property and opened,
+  **Open collab URL** command. A new note is created with the property and opened,
   the notice says it is waiting, and once the host is online the note takes
   the shared text. Edits flow both ways, both sides show a peer count.
   Disconnect on one side, the other's peer count drops.
@@ -39,6 +39,11 @@ doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values()][0].docs.
   Change the name while connected, the label follows.
 - Disconnect the guest, edit on both sides, **Connect file** on the guest's
   note. Both edits are present on both sides.
+- **Regenerate file URL** on the host. The property holds a new URL with
+  the same id and a new secret, it is on the clipboard, and the guest's peer
+  count drops. Edit on both sides. **Open collab URL** with the new URL on the
+  guest: the confirm speaks of an update, both connect, both edits are on
+  both sides, and the guest's property is the new URL once synced.
 - Stop sharing on the guest. The property and the state file are gone, the
   note stays.
 - Share a folder with nested notes from its context menu or with **Share

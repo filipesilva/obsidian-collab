@@ -199,20 +199,21 @@ const stopTurn = () => {
   }
 };
 process.on('exit', stopTurn);
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    stopTurn();
-    closeVaults();
-    process.exit(130);
-  });
+// A run that dies must still leave the vaults as it found them, or the
+// next run and any manual testing start with stray collabs and notes.
+let dying = false;
+async function die(code, message) {
+  if (dying) return;
+  dying = true;
+  if (message) console.log(message);
+  await cleanup().catch((e) => console.log(`     cleanup failed: ${e.message}`));
+  stopTurn();
+  closeVaults();
+  process.exit(code);
 }
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => void die(130));
 for (const event of ['uncaughtException', 'unhandledRejection']) {
-  process.on(event, (err) => {
-    console.log(`FAIL ${String(err?.stack || err).split('\n')[0]}`);
-    stopTurn();
-    closeVaults();
-    process.exit(1);
-  });
+  process.on(event, (err) => void die(1, `FAIL ${String(err?.stack || err).split('\n')[0]}`));
 }
 await openVaults();
 for (const [key, v] of Object.entries(VAULTS)) {
@@ -271,6 +272,32 @@ await step('edits flow both ways and reach disk', async () => {
   typeIn('b', ' +b');
   await until('a sees +b', () => editorText('a').includes('+b'), 15000);
   await until('disk on both', () => readFileSync(file('a', FILE), 'utf8').includes('+b') && readFileSync(file('b', guestFile), 'utf8').includes('+b'), 15000);
+});
+
+// The old URL stops working and b takes the new one by pasting it. b's
+// property follows through sync, since the frontmatter is shared text.
+await step('regenerate the file URL in a, b updates by url', async () => {
+  const old = parseInvite(url);
+  await runAsync('a', `await ${PLUGIN}.regenerateFile(app.vault.getFileByPath(${JSON.stringify(FILE)}), ${JSON.stringify(old)}, true); return 'ok';`, 90000);
+  await until('new url in a', () => urlOf('a', FILE) && urlOf('a', FILE) !== url, 10000);
+  url = urlOf('a', FILE);
+  const fresh = parseInvite(url);
+  assert(fresh.id === old.id && fresh.secret !== old.secret, `id or secret wrong: ${url}`);
+  await until('a lost b', () => collabs('a')[0]?.peers === 0, 15000);
+  // Apart now, both keep editing. Nothing may be lost when b comes over.
+  typeIn('a', ' +a-apart');
+  typeIn('b', ' +b-apart');
+  await sleep(1000);
+  await joinIn('b', fresh);
+  await until('peers on both sides', () => collabs('a')[0]?.peers === 1 && collabs('b')[0]?.peers === 1, 30000);
+  await until('b has the new url', () => urlOf('b', guestFile) === url, 30000).catch((e) => {
+    throw new Error(`${e.message}; a text: ${JSON.stringify(editorText('a'))}; b text: ${JSON.stringify(editorText('b'))}`);
+  });
+  await until('both merged', () => ['a', 'b'].every((v) => ['+a', '+b', '+a-apart', '+b-apart'].every((t) => editorText(v).includes(t))), 15000);
+  assert(collabs('b')[0]?.hasState === true, 'b lost its state');
+  assert(editorText('b').split('collab-url').length === 2, `property doubled: ${editorText('b').slice(0, 300)}`);
+  typeIn('a', ' +new');
+  await until('b sees +new', () => editorText('b').includes('+new'), 15000);
 });
 
 await step('a third peer joins, everyone syncs, then it leaves', async () => {
@@ -340,6 +367,28 @@ await step('create, rename, delete and edit propagate', async () => {
   await openIn('b', `${FOLDER}/One.md`);
   typeIn('b', ' +b');
   await until('edit in a', () => readFileSync(file('a', `${FOLDER}/One.md`), 'utf8').includes('+b'), 15000);
+});
+
+await step('regenerate the folder URL in a, b updates by url', async () => {
+  const old = parseInvite(folderUrl);
+  await runAsync('a', `await ${PLUGIN}.regenerateFolder(app.vault.getFolderByPath(${JSON.stringify(FOLDER)}), ${JSON.stringify(old)}, true); return 'ok';`, 90000);
+  await until('new url in a', () => urlOf('a', `${FOLDER}/collab.md`) && urlOf('a', `${FOLDER}/collab.md`) !== folderUrl, 10000);
+  folderUrl = urlOf('a', `${FOLDER}/collab.md`);
+  const fresh = parseInvite(folderUrl);
+  assert(fresh.id === old.id && fresh.secret !== old.secret, `id or secret wrong: ${folderUrl}`);
+  const mine = (v) => collabs(v).find((c) => c.id === fresh.id);
+  await until('a lost b', () => mine('a')?.peers === 0, 15000);
+  await openIn('b', `${FOLDER}/One.md`);
+  typeIn('b', ' +b-apart');
+  await openIn('a', `${FOLDER}/sub/Renamed.md`);
+  typeIn('a', ' +a-apart');
+  await sleep(1000);
+  await joinIn('b', fresh);
+  await until('peers on both sides', () => mine('a')?.peers === 1 && mine('b')?.peers === 1, 30000);
+  await until('b has the new url', () => urlOf('b', `${FOLDER}/collab.md`) === folderUrl, 10000);
+  await until('both merged', () => readFileSync(file('a', `${FOLDER}/One.md`), 'utf8').includes('+b-apart') && readFileSync(file('b', `${FOLDER}/sub/Renamed.md`), 'utf8').includes('+a-apart'), 15000);
+  assert(mine('b')?.hasState === true, 'b lost its state');
+  assert(mine('b')?.docs.length === 2, `docs ${JSON.stringify(mine('b'))}`);
 });
 
 await step('reconnect folder from state and stop sharing', async () => {

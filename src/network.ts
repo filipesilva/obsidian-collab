@@ -288,6 +288,14 @@ export class Provider {
         relayConfig: { urls: this.opts.relays },
         rtcConfig: this.opts.rtc ?? { iceServers: [] },
         rtcPolyfill: ObservedPeerConnection,
+        // Trystero shares one connection per peer across rooms and keeps it
+        // for two minutes after the last room using it is left, so a room
+        // joined again meanwhile reuses it. When both sides move rooms at
+        // once, as a regenerated URL makes them, the reuse races the fresh
+        // negotiation and one side can end up on a connection the other
+        // dropped: connected, but silent. Closing it at once keeps every
+        // join a fresh negotiation. Rooms open at the same time still share.
+        _test_only_sharedPeerIdleMs: 0,
       },
       this.opts.room,
     );

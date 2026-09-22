@@ -28,6 +28,14 @@ any Nostr relay, and put its URL in the list. Leave only that URL to keep a
 shared file or folder on your relay alone, including offline on a LAN. Reset
 restores the default list.
 
+A share's URL fixes its relays. To move a share to other relays, or to lock
+out someone who has the URL, one peer runs **Regenerate file URL** or
+**Regenerate folder URL**. That picks relays from their settings again and
+makes a new secret, under the same id, so everyone's notes, history and
+offline edits carry over. The old URL stops working. The other peers paste
+the new URL into **Open collab URL** or open it, and it replaces the one
+they had.
+
 ### STUN
 
 STUN servers tell a peer its public address so the other side can reach it.
