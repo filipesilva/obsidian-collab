@@ -1,6 +1,7 @@
-import { defaultRelayUrls, getRelaySockets, joinRoom, type MessageAction, type Room } from 'trystero';
+import { defaultRelayUrls, getRelaySockets, joinRoom, selfId, type MessageAction, type Room } from 'trystero';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import type * as Y from 'yjs';
 
@@ -57,9 +58,12 @@ export interface Status {
 
 // Syncs a Y.Doc with every peer in a Trystero room using the Yjs sync
 // protocol: step 1 on join, step 2 in reply, updates as they happen.
+// Awareness, who is here and where, travels the same way. Each state names
+// its Trystero peer, so it can be dropped the moment that peer leaves.
 export class Provider {
   private room!: Room;
   private sync!: MessageAction<Uint8Array>;
+  private aware!: MessageAction<Uint8Array>;
   private peerIds = new Set<string>();
   private attempts = 0;
   private failures = 0;
@@ -81,6 +85,7 @@ export class Provider {
   constructor(
     private doc: Y.Doc,
     private opts: RoomOptions,
+    readonly awareness = new Awareness(doc),
   ) {
     this.timing = { ...TIMING, ...opts.timing };
     this.reachable = new Promise((resolve) => (this.resolveReachable = resolve));
@@ -102,6 +107,8 @@ export class Provider {
     }
     this.schedule();
     doc.on('update', this.onUpdate);
+    awareness.on('update', this.onAwareness);
+    awareness.setLocalStateField('peer', selfId);
   }
 
   // Trystero's active peers, the ones a send reaches. `peerIds` is what we
@@ -247,6 +254,7 @@ export class Provider {
     this.unlisten.abort();
     window.clearTimeout(this.checkTimer);
     this.doc.off('update', this.onUpdate);
+    this.awareness.off('update', this.onAwareness);
     await this.room.leave().catch(() => {});
   }
 
@@ -285,15 +293,22 @@ export class Provider {
     );
     this.sync = this.room.makeAction<Uint8Array>('sync');
     this.sync.onMessage = (data, { peerId }) => this.receive(toBytes(data), peerId);
+    this.aware = this.room.makeAction<Uint8Array>('aware');
+    this.aware.onMessage = (data, { peerId }) => applyAwarenessUpdate(this.awareness, toBytes(data), new Received(this, peerId));
     this.room.onPeerJoin = (peerId) => {
       this.peerIds.add(peerId);
       const encoder = encoding.createEncoder();
       syncProtocol.writeSyncStep1(encoder, this.doc);
       this.send(encoder, peerId);
+      // A state a peer dropped comes back only with a newer clock, so
+      // announce again to everyone rather than resend to the one.
+      this.awareness.setLocalState(this.awareness.getLocalState());
       this.onPeers?.(this.peerIds.size);
     };
     this.room.onPeerLeave = (peerId) => {
       this.peerIds.delete(peerId);
+      const gone = [...this.awareness.getStates()].filter(([, state]) => state.peer === peerId).map(([client]) => client);
+      removeAwarenessStates(this.awareness, gone, this);
       this.onPeers?.(this.peerIds.size);
     };
   }
@@ -326,13 +341,26 @@ export class Provider {
   // when a link is missing this keeps everyone in sync. Yjs ignores
   // updates it already has, so the duplicates cost only bytes.
   private onUpdate = (update: Uint8Array, origin: unknown) => {
-    const from = origin instanceof Received && origin.provider === this ? origin.from : null;
-    const targets = this.peers.filter((id) => id !== from);
+    const targets = this.targets(origin);
     if (!targets.length) return;
     const encoder = encoding.createEncoder();
     syncProtocol.writeUpdate(encoder, update);
     void this.sync.send(encoding.toUint8Array(encoder), { target: targets });
   };
+
+  // Forwarded like updates. A state already known changes nothing, so it
+  // stops there.
+  private onAwareness = ({ added, updated, removed }: Record<'added' | 'updated' | 'removed', number[]>, origin: unknown) => {
+    const targets = this.targets(origin);
+    if (!targets.length) return;
+    void this.aware.send(encodeAwarenessUpdate(this.awareness, [...added, ...updated, ...removed]), { target: targets });
+  };
+
+  // Every peer but the one the change came from.
+  private targets(origin: unknown): string[] {
+    const from = origin instanceof Received && origin.provider === this ? origin.from : null;
+    return this.peers.filter((id) => id !== from);
+  }
 
   private receive(data: Uint8Array, peerId: string) {
     const encoder = encoding.createEncoder();

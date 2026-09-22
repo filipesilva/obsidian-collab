@@ -14,6 +14,7 @@ provider.onPeers = (count) => post({ type: 'peers', count });
 text.observe(() => post({ type: 'text', data: text.toString() }));
 window.addEventListener('message', (e: MessageEvent<{ type: string; data?: string }>) => {
   if (e.data.type === 'insert') text.insert(text.length, e.data.data ?? '');
+  if (e.data.type === 'name') provider.awareness.setLocalStateField('user', { name: e.data.data });
   if (e.data.type === 'leave') void provider.destroy();
 });
 post({ type: 'ready' });

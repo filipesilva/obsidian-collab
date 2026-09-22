@@ -1,5 +1,6 @@
 import { App, MarkdownView, TFile, debounce } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
+import type { Awareness } from 'y-protocols/awareness';
 import type * as Y from 'yjs';
 import { bind, isBound, unbind } from './editor';
 import { applyContent } from './sync';
@@ -49,7 +50,7 @@ export class SharedDoc {
     if (!view || view.state.doc.length === this.ytext.length) return;
     console.error('collab: editor drifted from the shared text', this.file.path, view.state.doc.length, this.ytext.length);
     unbind(view);
-    bind(view, this.ytext, 'text');
+    bind(view, this.ytext, 'text', this.awareness);
   }
 
   // With adopt, the shared text replaces the note: joining a live doc.
@@ -59,6 +60,7 @@ export class SharedDoc {
     public file: TFile,
     readonly id: string,
     readonly ytext: Y.Text,
+    private awareness: Awareness,
     adopt = false,
   ) {
     ytext.observe(this.onText);
@@ -78,7 +80,7 @@ export class SharedDoc {
     if (this.view && views.includes(this.view) && isBound(this.view, this.ytext)) return;
     if (this.view) unbind(this.view);
     this.view = views[0] ?? null;
-    if (this.view) bind(this.view, this.ytext, this.adopting ? 'text' : 'editor');
+    if (this.view) bind(this.view, this.ytext, this.adopting ? 'text' : 'editor', this.awareness);
   }
 
   async onModify(): Promise<void> {

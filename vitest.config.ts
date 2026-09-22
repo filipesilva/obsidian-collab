@@ -20,6 +20,7 @@ export default defineConfig({
       'lib0/encoding',
       'trystero',
       'y-codemirror.next',
+      'y-protocols/awareness',
       'y-protocols/sync',
       'yjs',
     ],

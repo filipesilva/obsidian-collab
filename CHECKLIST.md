@@ -31,6 +31,12 @@ doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values()][0].docs.
 - A third vault joins the same URL. All three show two peers, an edit from
   any of them reaches the other two, and when it disconnects the other two
   drop to one peer.
+- Set a different **Name** in each vault's settings. With the same note open
+  in both, a click in one shows a coloured cursor with that name in the
+  other, and a selection shows as a highlight. Close the note, the cursor
+  goes. The status bar menu and **Show connected** list each peer indented
+  under its collab, with the note they are in.
+  Change the name while connected, the label follows.
 - Disconnect the guest, edit on both sides, **Connect file** on the guest's
   note. Both edits are present on both sides.
 - Stop sharing on the guest. The property and the state file are gone, the
@@ -48,7 +54,8 @@ doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values()][0].docs.
   Stop sharing the folder: `collab.md` and the state file are gone, the
   notes stay.
 - With TURN set to the local test server (`turn:<lan ip>:3479`, collab/collab,
-  Always relay on) a join connects and **Show connected** says "(relay)".
+  Always relay on) a join connects and **Show connected** and the status bar
+  menu say "relay".
 - The status bar shows how many collabs are connected. Clicking it lists
   them with their peer counts, each disconnects on click, and **Disconnect
   all** empties it. The command does the same.

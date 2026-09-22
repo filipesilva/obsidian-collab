@@ -12,3 +12,10 @@ If your plugin does not need CSS, delete this file.
   font-family: var(--font-monospace);
   font-size: var(--font-smaller);
 }
+
+/* Peer cursors: keep the name visible, since touch screens cannot hover. */
+.cm-editor .cm-ySelectionCaret > .cm-ySelectionInfo {
+  opacity: 1;
+  font-family: var(--font-interface);
+  border-radius: var(--radius-s) var(--radius-s) var(--radius-s) 0;
+}

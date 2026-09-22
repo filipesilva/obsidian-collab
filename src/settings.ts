@@ -12,12 +12,14 @@ export interface TurnSettings {
 }
 
 export interface CollabSettings {
+  name: string;
   relays: string[];
   stun: string[];
   turn: TurnSettings;
 }
 
 export const DEFAULT_SETTINGS: CollabSettings = {
+  name: '',
   relays: DEFAULT_RELAYS,
   stun: DEFAULT_STUN,
   turn: { url: '', username: '', credential: '', always: false },
@@ -25,10 +27,11 @@ export const DEFAULT_SETTINGS: CollabSettings = {
 
 const DOCS = 'https://github.com/filipesilva/obsidian-collab/blob/master/README.md';
 
-// A bare host:port is taken as turn:host:port.
+// A bare host:port is taken as turn:host:port. Chrome refuses a TURN server
+// without credentials, so the three fields count only together.
 export function turnServer(settings: CollabSettings): RTCIceServer | null {
   const { url, username, credential } = settings.turn;
-  if (!url) return null;
+  if (!url || !username || !credential) return null;
   const urls = /^turns?:/.test(url) ? url : `turn:${url}`;
   return { urls, username, credential };
 }
@@ -71,6 +74,11 @@ export class CollabSettingTab extends PluginSettingTab {
           }),
     ];
     return [
+      {
+        name: 'Name',
+        desc: 'Shown to peers next to your cursor.',
+        control: { type: 'text', key: 'name' },
+      },
       {
         type: 'group',
         heading: 'Signalling',
@@ -135,7 +143,7 @@ export class CollabSettingTab extends PluginSettingTab {
               setting.addButton((button) =>
                 button.setButtonText('Test').onClick(async () => {
                   const turn = turnServer(settings);
-                  if (!turn) return void new Notice('Collab: fill in the TURN server first');
+                  if (!turn) return void new Notice('Collab: fill in the TURN server, username and credential first');
                   button.setDisabled(true).setButtonText('Testing…');
                   const ok = await checkTurn(turn);
                   button.setDisabled(false).setButtonText('Test');
@@ -151,6 +159,7 @@ export class CollabSettingTab extends PluginSettingTab {
 
   getControlValue(key: string): unknown {
     const { settings } = this.plugin;
+    if (key === 'name') return settings.name;
     if (key === 'relays') return settings.relays.join('\n');
     if (key === 'stun') return settings.stun.join('\n');
     if (key === 'turn.always') return settings.turn.always;
@@ -161,7 +170,8 @@ export class CollabSettingTab extends PluginSettingTab {
   setControlValue(key: string, value: unknown): Promise<void> {
     const { settings } = this.plugin;
     const text = String(value);
-    if (key === 'relays') settings.relays = lines(text);
+    if (key === 'name') settings.name = text.trim();
+    else if (key === 'relays') settings.relays = lines(text);
     else if (key === 'stun') settings.stun = lines(text);
     else if (key === 'turn.always') settings.turn.always = value === true;
     else if (key.startsWith('turn.')) settings.turn[key.slice(5) as 'url' | 'username' | 'credential'] = text.trim();

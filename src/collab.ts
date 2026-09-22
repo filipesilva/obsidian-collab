@@ -1,4 +1,5 @@
 import { App, TFile } from 'obsidian';
+import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { Invite, inviteUrl } from './invite';
 import { Provider, type Status } from './network';
@@ -6,12 +7,23 @@ import { SharedDoc, sourceViews } from './shared-doc';
 import { Persistence, type StateStore } from './state';
 import { DocEntry, applyContent, docs, getText, observeDocs, openDoc } from './sync';
 
+// Our colour for this run of the plugin, the same in every collab. It
+// travels with the name, so everyone sees a peer in the same colour.
+const HUE = Math.floor(Math.random() * 360);
+
+export interface Peer {
+  name: string;
+  // Vault path of the note their cursor is in, if any.
+  path: string | null;
+}
+
 // A shared file or folder: one Y.Doc, one Trystero room, its saved state,
 // and the shared notes in it keyed by vault path. A file collab holds one
 // doc, keyed by the collab id. A folder collab holds one per markdown file,
 // with the entry path relative to the folder.
 export class Collab {
   readonly ydoc = new Y.Doc();
+  readonly awareness = new Awareness(this.ydoc);
   readonly docs = new Map<string, SharedDoc>();
   provider: Provider | null = null;
   // Whether saved state existed. With it, files win over the text on open.
@@ -61,7 +73,7 @@ export class Collab {
 
   connect(onStatus: (status: Status) => void): void {
     const { relays, id, secret } = this.invite;
-    this.provider = new Provider(this.ydoc, { relays, room: id, secret, rtc: this.rtc });
+    this.provider = new Provider(this.ydoc, { relays, room: id, secret, rtc: this.rtc }, this.awareness);
     this.provider.onStatus = onStatus;
     this.provider.onPeers = (count) => {
       onStatus(this.status());
@@ -78,6 +90,25 @@ export class Collab {
 
   get peers(): number {
     return this.provider?.peers.length ?? 0;
+  }
+
+  setName(name: string): void {
+    const user = { name: name || 'Anonymous', color: `hsl(${HUE}, 70%, 40%)`, colorLight: `hsla(${HUE}, 70%, 40%, 0.25)` };
+    this.awareness.setLocalStateField('user', user);
+  }
+
+  // Everyone else here, and the note each one's cursor is in.
+  others(): Peer[] {
+    const out: Peer[] = [];
+    for (const [client, state] of this.awareness.getStates()) {
+      if (client === this.awareness.clientID) continue;
+      const { name = 'Anonymous' } = (state.user ?? {}) as Partial<Peer>;
+      const head = (state.cursor as { head: unknown } | null | undefined)?.head;
+      const type = head ? Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(head), this.ydoc)?.type : null;
+      const doc = [...this.docs.values()].find((doc) => doc.ytext === type);
+      out.push({ name, path: doc?.file.path ?? null });
+    }
+    return out;
   }
 
   // Whether any relay answered, so others can find us. A sync proves it too.
@@ -137,7 +168,7 @@ export class Collab {
   // someone without history could win over the real one.
   async seed(file: TFile, id: string, entryPath = file.path): Promise<SharedDoc> {
     const content = await this.app.vault.read(file);
-    return this.track(file, new SharedDoc(this.app, file, id, openDoc(this.ydoc, { id, path: entryPath, content })));
+    return this.track(file, new SharedDoc(this.app, file, id, openDoc(this.ydoc, { id, path: entryPath, content }), this.awareness));
   }
 
   // Binds the file to a doc the collab already has. With saved state the
@@ -148,7 +179,7 @@ export class Collab {
     const text = getText(this.ydoc, id);
     if (!text) throw new Error(`collab: no doc ${id}`);
     if (content !== null) applyContent(text, content);
-    return this.track(file, new SharedDoc(this.app, file, id, text, !this.hasState));
+    return this.track(file, new SharedDoc(this.app, file, id, text, this.awareness, !this.hasState));
   }
 
   private track(file: TFile, doc: SharedDoc): SharedDoc {
@@ -206,6 +237,6 @@ export class Collab {
     const ytext = getText(this.ydoc, id);
     if (!doc || !ytext || ytext === doc.ytext) return;
     doc.destroy();
-    this.docs.set(doc.file.path, new SharedDoc(this.app, doc.file, id, ytext, true));
+    this.docs.set(doc.file.path, new SharedDoc(this.app, doc.file, id, ytext, this.awareness, true));
   }
 }

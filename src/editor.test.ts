@@ -2,6 +2,7 @@ import { history, undo } from '@codemirror/commands';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it } from 'vitest';
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { bind, collabExtension, isBound, unbind } from './editor';
 import { getText, observeDocs, openDoc } from './sync';
@@ -192,5 +193,44 @@ describe('rebinding after a lost seed', () => {
     expect(view.state.doc.toString()).toBe('abc');
     expect(getText(a, note.id)!.toString()).toBe('abc');
     expect(getText(b, note.id)!.toString()).toBe('abc');
+  });
+});
+
+describe('presence', () => {
+  // Two peers on the same text, docs and awareness forwarded both ways.
+  function pair() {
+    const docs = [new Y.Doc(), new Y.Doc()] as const;
+    const peers = docs.map((doc) => ({ view: editor('hello'), ytext: doc.getText('t'), awareness: new Awareness(doc) }));
+    docs[0].getText('t').insert(0, 'hello');
+    Y.applyUpdate(docs[1], Y.encodeStateAsUpdate(docs[0]));
+    peers.forEach((from, i) => {
+      const to = peers[1 - i]!;
+      from.awareness.on('update', ({ added, updated, removed }: Record<string, number[]>, origin: unknown) => {
+        if (origin === 'link') return;
+        applyAwarenessUpdate(to.awareness, encodeAwarenessUpdate(from.awareness, [...added!, ...updated!, ...removed!]), 'link');
+      });
+      bind(from.view, from.ytext, 'editor', from.awareness);
+    });
+    return peers as [(typeof peers)[0], (typeof peers)[0]];
+  }
+
+  it('shows a peer the cursor and name, and hides them on unbind', () => {
+    const [a, b] = pair();
+    a.awareness.setLocalStateField('user', { name: 'Ana', color: 'hsl(10, 70%, 40%)' });
+    a.view.focus();
+    a.view.dispatch({ selection: { anchor: 1, head: 3 } });
+    expect(b.view.dom.querySelector('.cm-ySelectionInfo')?.textContent).toBe('Ana');
+    expect(b.view.dom.querySelector('.cm-ySelection')?.textContent).toBe('el');
+    expect(a.view.dom.querySelector('.cm-ySelectionCaret')).toBeNull();
+    unbind(a.view);
+    expect(b.view.dom.querySelector('.cm-ySelectionCaret')).toBeNull();
+  });
+
+  it('keeps a cursor that is in another text on unbind', () => {
+    const [a] = pair();
+    const other = { anchor: Y.createRelativePositionFromTypeIndex(a.ytext.doc!.getText('other'), 0) };
+    a.awareness.setLocalStateField('cursor', { ...other, head: other.anchor });
+    unbind(a.view);
+    expect(a.awareness.getLocalState()?.cursor).not.toBeNull();
   });
 });

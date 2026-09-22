@@ -5,6 +5,10 @@ Yjs CRDT over WebRTC. No server ever holds document data.
 
 See [TODO.md](TODO.md) for the plan.
 
+Peers see each other's cursor and selection, with the name set in the plugin
+settings. The name and cursor go only to the peers of a collab, the same way
+edits do.
+
 ## Connectivity
 
 Edits travel directly between peers over WebRTC data channels, encrypted end

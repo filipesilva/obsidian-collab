@@ -84,6 +84,10 @@ class Peer {
     this.iframe.contentWindow?.postMessage({ type: 'insert', data }, '*');
   }
 
+  name(data: string) {
+    this.iframe.contentWindow?.postMessage({ type: 'name', data }, '*');
+  }
+
   async leave() {
     this.iframe.contentWindow?.postMessage({ type: 'leave' }, '*');
     await new Promise((r) => setTimeout(r, 500));
@@ -187,6 +191,25 @@ describe('Provider', () => {
 
   it('syncs a doc with a peer through the local worker', { timeout: 40000 }, async () => {
     await syncWithPeer(LOCAL_RELAYS);
+  });
+
+  it('sees who a peer is, until they leave', { timeout: 40000 }, async () => {
+    const config = newConfig(LOCAL_RELAYS);
+    const me = local(config);
+    const names = () => [...me.provider.awareness.getStates().values()].map((state) => (state.user as { name?: string } | undefined)?.name).filter(Boolean);
+    const peer = new Peer(config);
+    try {
+      await peer.waitText((t) => t === 'hello');
+      peer.name('Ana');
+      await until(() => names().includes('Ana'), 'never saw the peer name');
+      peer.name('Bea');
+      await until(() => names().join() === 'Bea', 'never saw the new name');
+    } finally {
+      await peer.leave();
+    }
+    // Well before the 30 s after which awareness drops a silent peer by itself.
+    await until(() => me.provider.awareness.getStates().size === 1, 'the peer state outlived the peer', 10000);
+    await me.provider.destroy();
   });
 
   it('leaves a healthy relay socket alone when checked', { timeout: 40000 }, async () => {

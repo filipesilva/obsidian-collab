@@ -1,5 +1,5 @@
 import { Menu, Notice, Plugin, TFile, TFolder } from 'obsidian';
-import { Collab } from './collab';
+import { Collab, type Peer } from './collab';
 import { gatherDiagnostics, natCheck } from './diagnostics';
 import { collabExtension } from './editor';
 import { FolderSync } from './folder';
@@ -41,7 +41,7 @@ export default class CollabPlugin extends Plugin {
     await this.loadSettings();
     this.store = vaultStore(this.app, this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`);
     this.statusBar = this.addStatusBarItem();
-    this.registerDomEvent(this.statusBar, 'click', (event) => this.showConnected(event));
+    this.registerDomEvent(this.statusBar, 'click', (event) => void this.showConnected(event));
     this.updateStatus();
     this.addSettingTab(new CollabSettingTab(this.app, this));
     this.registerEditorExtension(collabExtension);
@@ -284,15 +284,23 @@ export default class CollabPlugin extends Plugin {
     return peers;
   }
 
-  private async connectedSummary(): Promise<string> {
+  // Peer count and, per connected peer, whether the connection is direct
+  // or through a TURN relay.
+  private async peerSummary(collab: Collab): Promise<string> {
+    const paths = await collab.paths();
+    return `${plural(collab.peers, 'peer')}${paths.length ? `, ${paths.join(', ')}` : ''}`;
+  }
+
+  // One line per collab, then one indented per peer in it, as the menu
+  // shows them.
+  private async connectedSummary(): Promise<DocumentFragment | string> {
     if (!this.collabs.size) return 'Collab: nothing connected';
-    const lines: string[] = [];
+    const fragment = createFragment();
     for (const collab of this.collabs.values()) {
-      const paths = await collab.paths();
-      const detail = paths.length ? ` (${paths.join(', ')})` : '';
-      lines.push(`${collabName(collab)}: ${plural(collab.peers, 'peer')}${detail}`);
+      fragment.createDiv({ text: `${collabName(collab)}: ${await this.peerSummary(collab)}` });
+      for (const peer of collab.others()) fragment.createDiv({ text: peerLine(peer) });
     }
-    return `Collab: ${lines.join(', ')}`;
+    return fragment;
   }
 
   // Bottom bar: how many collabs are connected and how many peers in all,
@@ -303,17 +311,26 @@ export default class CollabPlugin extends Plugin {
     this.statusBar.toggleClass('mod-clickable', n > 0);
   }
 
-  private showConnected(event: MouseEvent) {
+  private async showConnected(event: MouseEvent) {
     if (!this.collabs.size) return;
     const menu = new Menu();
     for (const collab of this.collabs.values()) {
-      const title = `Disconnect ${collabName(collab)} (${plural(collab.peers, 'peer')})`;
+      const title = `Disconnect ${collabName(collab)} (${await this.peerSummary(collab)})`;
       menu.addItem((item) =>
         item
           .setTitle(title)
           .setIcon('unplug')
           .onClick(() => void this.disconnect(collab)),
       );
+      for (const peer of collab.others()) {
+        menu.addItem((item) =>
+          item
+            .setTitle(peerLine(peer))
+            .setIcon('user')
+            .setDisabled(!peer.path)
+            .onClick(() => void this.app.workspace.openLinkText(peer.path ?? '', '')),
+        );
+      }
     }
     menu.addSeparator();
     menu.addItem((item) => item.setTitle('Disconnect all').setIcon('unplug').onClick(() => void this.disconnectAll()));
@@ -620,6 +637,7 @@ export default class CollabPlugin extends Plugin {
   private async open(invite: Invite, path: string): Promise<Collab> {
     if (Date.now() - this.natCheckedAt >= 60000) void this.refreshVerdict();
     const collab = new Collab(this.app, invite, path, rtcConfig(this.settings), this.store);
+    collab.setName(this.settings.name);
     collab.onPeers = (count) => new Notice(count ? `Collab: ${plural(count, 'peer')} connected` : 'Collab: no peers connected');
     this.collabs.set(collab.id, collab);
     this.sessions.set(collab, { seen: collab.status() });
@@ -692,6 +710,7 @@ export default class CollabPlugin extends Plugin {
   }
 
   async saveSettings() {
+    for (const collab of this.collabs.values()) collab.setName(this.settings.name);
     await this.saveData(this.settings);
   }
 }
@@ -714,6 +733,12 @@ function folderName(folder: TFolder): string {
 
 function collabName(collab: Collab): string {
   return collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || 'the vault';
+}
+
+// Indented under its collab. Spaces that survive a native menu, which
+// takes plain strings only.
+function peerLine({ name, path }: Peer): string {
+  return `\u00a0\u00a0\u00a0\u00a0${path ? `${name} in ${path.replace(/\.md$/, '')}` : name}`;
 }
 
 function plural(n: number, word: string): string {

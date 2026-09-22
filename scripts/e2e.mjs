@@ -254,6 +254,17 @@ await step('join the file from b by url', async () => {
   await until('peers on both sides', () => collabs('a')[0]?.peers === 1 && collabs('b')[0]?.peers === 1, 20000);
 });
 
+await step('peers see each other by name', async () => {
+  const setName = (vault, name) => run(vault, `const p=${PLUGIN}; const was=p.settings.name; p.settings.name=${JSON.stringify(name)}; p.saveSettings(); was`);
+  const others = (vault) => run(vault, `[...${PLUGIN}.collabs.values()][0].others().map(o=>o.name).join()`);
+  const was = { a: setName('a', 'Ana'), b: setName('b', 'Bea') };
+  try {
+    await until('names on both sides', () => others('a') === 'Bea' && others('b') === 'Ana', 15000);
+  } finally {
+    for (const vault of ['a', 'b']) setName(vault, was[vault]);
+  }
+});
+
 await step('edits flow both ways and reach disk', async () => {
   typeIn('a', ' +a');
   await until('b sees +a', () => editorText('b').includes('+a'), 15000);
