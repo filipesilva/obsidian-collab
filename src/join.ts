@@ -116,13 +116,12 @@ export class AskUrl extends Modal {
       this.url = value;
       this.close();
     };
-    new Setting(contentEl).setName('Collab URL').addText((text) => {
-      text.onChange((v) => (value = v));
-      text.inputEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') submit();
-      });
-      window.setTimeout(() => text.inputEl.focus());
+    const input = contentEl.createEl('input', { type: 'text', placeholder: 'obsidian://collab?…', cls: 'collab-url-input' });
+    input.addEventListener('input', () => (value = input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
     });
+    window.setTimeout(() => input.focus());
     new Setting(contentEl)
       .addButton((b) => b.setButtonText('Open').setCta().onClick(submit))
       .addButton((b) => b.setButtonText('Cancel').onClick(() => this.close()));

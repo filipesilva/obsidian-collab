@@ -13,6 +13,10 @@ If your plugin does not need CSS, delete this file.
   font-size: var(--font-smaller);
 }
 
+.collab-url-input {
+  width: 100%;
+}
+
 /* Peer cursors: keep the name visible, since touch screens cannot hover. */
 .cm-editor .cm-ySelectionCaret > .cm-ySelectionInfo {
   opacity: 1;
