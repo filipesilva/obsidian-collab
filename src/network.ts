@@ -19,6 +19,8 @@ export const TIMING = {
   reachable: 10000,
 };
 export const DEFAULT_RELAYS: string[] = defaultRelayUrls;
+// Relays run for Collab by its users. A new share prefers these.
+export const COMMUNITY_RELAYS: string[] = ['wss://obsidian-collab.filipesilva.workers.dev'];
 export const DEFAULT_STUN = [
   'stun:stun.l.google.com:19302',
   'stun:stun1.l.google.com:19302',

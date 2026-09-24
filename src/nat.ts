@@ -124,6 +124,16 @@ export async function liveRelays(urls: string[], count: number, timeout = 4000):
   return live;
 }
 
+// Every `preferred` relay that answers, then others to fill up to `count`.
+// Both lists are probed at once, so preferring costs no time.
+export async function preferredLiveRelays(preferred: string[], others: string[], count: number, timeout?: number): Promise<string[]> {
+  const [first, rest] = await Promise.all([
+    liveRelays(preferred, count, timeout),
+    liveRelays(others.filter((url) => !preferred.includes(url)), count, timeout),
+  ]);
+  return [...first, ...rest].slice(0, count);
+}
+
 function answers(url: string, timeout: number): Promise<boolean> {
   return new Promise((resolve) => {
     let socket: WebSocket;

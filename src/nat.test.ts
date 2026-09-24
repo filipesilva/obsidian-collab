@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from 'vitest';
-import { checkNat, checkTurn, describeNat, liveRelays, parseCandidate, probeSockets } from './nat';
+import { checkNat, checkTurn, describeNat, liveRelays, parseCandidate, preferredLiveRelays, probeSockets } from './nat';
 import { DEFAULT_STUN } from './network';
 
 const yes = () => Promise.resolve(true);
@@ -70,6 +70,18 @@ describe('liveRelays', () => {
     expect(live).toHaveLength(1);
     expect(live[0]).toMatch(/^ws:\/\/localhost:8788/);
     expect(await liveRelays(['ws://localhost:1'], 3, 2000)).toEqual([]);
+  });
+});
+
+describe('preferredLiveRelays', () => {
+  it('takes the preferred relays first and fills up from the others', { timeout: 20000 }, async () => {
+    const preferred = ['ws://localhost:1', 'ws://localhost:8788/c1', 'ws://localhost:8788/c2'];
+    const others = ['ws://localhost:8788/c1', 'ws://localhost:8788/p1', 'ws://localhost:8788/p2', 'ws://localhost:8788/p3', 'ws://localhost:2'];
+    const live = await preferredLiveRelays(preferred, others, 3, 3000);
+    expect(live).toHaveLength(3);
+    expect(live.slice(0, 2).sort()).toEqual(['ws://localhost:8788/c1', 'ws://localhost:8788/c2']);
+    expect(live[2]).toMatch(/^ws:\/\/localhost:8788\/p/);
+    expect(await preferredLiveRelays([], others, 2, 3000)).toHaveLength(2);
   });
 });
 

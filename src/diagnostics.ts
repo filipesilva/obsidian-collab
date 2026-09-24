@@ -5,7 +5,7 @@ import { pickRelays } from './network';
 import { type CollabSettings, turnServer } from './settings';
 
 export function natCheck(settings: CollabSettings): Promise<NatCheck> {
-  return checkNat(settings.stun, () => probeSockets(pickRelays(settings.relays)));
+  return checkNat(settings.stun, () => probeSockets(pickRelays([...settings.community, ...settings.relays])));
 }
 
 // Everything needed to debug a connection from afar, as text.

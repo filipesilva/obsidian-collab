@@ -37,6 +37,7 @@ the shared doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values(
 - **Check network** reports the verdict in a notice. On a phone on cellular
   it should say symmetric NAT and point at TURN, also on its own when
   connecting without TURN configured.
-- Set the signalling servers to the local worker only. Start and join work
-  with the worker running and nothing else reachable.
+- Put the local worker in **Community Collab relays** and empty **Public
+  Nostr relays**. Start and join work with the worker running and nothing
+  else reachable.
 - Reset a settings list. The defaults come back and the textarea shows them.

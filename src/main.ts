@@ -7,7 +7,7 @@ import { readInvite, readUrl, removeUrl, writeUrl } from './frontmatter';
 import { MARKER, findById, markerPath } from './identity';
 import { Invite, inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
 import { AskUrl, Confirm, ShowText, confirmJoin, confirmRegenerate, createNote } from './join';
-import { checkTurn, describeNat, liveRelays } from './nat';
+import { checkTurn, describeNat, preferredLiveRelays } from './nat';
 import { RELAY_COUNT, type Status } from './network';
 import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
 import type { StateStore } from './state';
@@ -364,19 +364,20 @@ export default class CollabPlugin extends Plugin {
   // Picks relays that answer right now. The URL carries them, so a dead
   // one would burden every join forever.
   private async newInvite(id = randomId()): Promise<Invite | null> {
-    if (!this.settings.relays.length) {
-      new Notice('Collab: add a signalling server in settings first');
+    const { community, relays: publicRelays } = this.settings;
+    if (!community.length && !publicRelays.length) {
+      new Notice('Collab: add a relay in settings first');
       return null;
     }
     const notice = new Notice('Collab: checking relays…', 0);
     let relays: string[];
     try {
-      relays = await liveRelays(this.settings.relays, RELAY_COUNT);
+      relays = await preferredLiveRelays(community, publicRelays, RELAY_COUNT);
     } finally {
       notice.hide();
     }
     if (!relays.length) {
-      new Notice('Collab: no signalling server answered. Check the network and the list in settings.', 10000);
+      new Notice('Collab: no relay answered. Check the network and the relay lists in settings.', 10000);
       return null;
     }
     return { relays, id, secret: randomId(16) };

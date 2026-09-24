@@ -17,16 +17,19 @@ configurable in the plugin settings, and none can read a note.
 
 ### Signalling
 
-Peers find each other through Nostr relays. The plugin ships with the public
-relays that [Trystero](https://github.com/dmotz/trystero) uses. A shared
-file or folder dials a few of them, and its URL tells guests which, so both
-sides meet. Relays see your IP address, an id and encrypted connection
-offers.
+Peers find each other through Nostr relays. A shared file or folder dials
+five of them, and its URL tells guests which, so both sides meet. Relays see
+your IP address, an id and encrypted connection offers.
+
+There are two lists. **Community Collab relays** are run for Collab by its
+users, and a new share takes every one of them that answers. **Public Nostr
+relays** fill it up to five. The public list starts as the relays that
+[Trystero](https://github.com/dmotz/trystero) uses.
 
 To run your own, deploy the Worker in [worker/](worker/README.md), or use
-any Nostr relay, and put its URL in the list. Leave only that URL to keep a
-shared file or folder on your relay alone, including offline on a LAN. Reset
-restores the default list.
+any Nostr relay, and put its URL in **Community Collab relays**. To keep a
+shared file or folder on your relay alone, including offline on a LAN, also
+empty **Public Nostr relays**. Reset restores both lists.
 
 A share's URL fixes its relays. To move a share to other relays, or to lock
 out someone who has the URL, one peer runs **Regenerate file URL** or

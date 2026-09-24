@@ -1,7 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting, type SettingDefinitionItem } from 'obsidian';
 import type CollabPlugin from './main';
 import { checkTurn } from './nat';
-import { DEFAULT_RELAYS, DEFAULT_STUN } from './network';
+import { COMMUNITY_RELAYS, DEFAULT_RELAYS, DEFAULT_STUN } from './network';
 
 export interface TurnSettings {
   url: string;
@@ -13,6 +13,7 @@ export interface TurnSettings {
 
 export interface CollabSettings {
   name: string;
+  community: string[];
   relays: string[];
   stun: string[];
   turn: TurnSettings;
@@ -20,6 +21,7 @@ export interface CollabSettings {
 
 export const DEFAULT_SETTINGS: CollabSettings = {
   name: '',
+  community: COMMUNITY_RELAYS,
   relays: DEFAULT_RELAYS,
   stun: DEFAULT_STUN,
   turn: { url: '', username: '', credential: '', always: false },
@@ -82,14 +84,22 @@ export class CollabSettingTab extends PluginSettingTab {
       {
         type: 'group',
         heading: 'Signalling',
-        extraButtons: reset(() => (settings.relays = [...DEFAULT_RELAYS])),
+        extraButtons: reset(() => {
+          settings.community = [...COMMUNITY_RELAYS];
+          settings.relays = [...DEFAULT_RELAYS];
+        }),
         items: [
           {
-            name: 'Servers',
+            name: 'Community Collab relays',
             desc: this.desc(
-              'Nostr relays where peers find each other, one per line. A collab dials a few of them and its URL tells guests which. They see your IP address and a room id, never the notes.',
+              'Relays run for Collab by its users, one per line. A new collab dials five relays and its URL tells guests which. It takes these first. Relays see your IP address and a room id, never the notes.',
               'signalling',
             ),
+            control: { type: 'textarea', key: 'community', rows: 3 },
+          },
+          {
+            name: 'Public Nostr relays',
+            desc: 'Used to fill up to five when the community relays are not enough, one per line.',
             control: { type: 'textarea', key: 'relays', rows: 5 },
           },
         ],
@@ -160,6 +170,7 @@ export class CollabSettingTab extends PluginSettingTab {
   getControlValue(key: string): unknown {
     const { settings } = this.plugin;
     if (key === 'name') return settings.name;
+    if (key === 'community') return settings.community.join('\n');
     if (key === 'relays') return settings.relays.join('\n');
     if (key === 'stun') return settings.stun.join('\n');
     if (key === 'turn.always') return settings.turn.always;
@@ -171,6 +182,7 @@ export class CollabSettingTab extends PluginSettingTab {
     const { settings } = this.plugin;
     const text = String(value);
     if (key === 'name') settings.name = text.trim();
+    else if (key === 'community') settings.community = lines(text);
     else if (key === 'relays') settings.relays = lines(text);
     else if (key === 'stun') settings.stun = lines(text);
     else if (key === 'turn.always') settings.turn.always = value === true;

@@ -2,7 +2,9 @@
 
 A signalling server for the plugin: the smallest Nostr relay that Trystero
 needs. It forwards live events between the peers subscribed to a room and
-stores nothing. Every message is encrypted by the plugin with the room
+stores nothing. It accepts only ephemeral events, kinds 20000 to 29999, and
+messages up to 65,536 characters, and describes itself to relay directories with a
+NIP-11 document. Every message is encrypted by the plugin with the room
 secret before it gets here, so this server never sees connection details or
 document content.
 
@@ -16,9 +18,9 @@ npm install
 npm run dev
 ```
 
-Add `ws://localhost:8787` to the plugin's signalling servers, or
+Add `ws://localhost:8787` to the plugin's **Community Collab relays**, or
 `ws://<lan ip>:8787` with `npm run dev -- --ip 0.0.0.0` for a phone on the
-same network. Replace the list with just that URL to keep a room fully
+same network. Empty **Public Nostr relays** as well to keep a room fully
 local.
 
 The plugin's tests start this Worker themselves on port 8788.
@@ -32,8 +34,8 @@ npm run deploy
 
 No domain is needed. The Worker gets a free `workers.dev` address, and the
 first deploy asks you to pick the subdomain. Add
-`wss://obsidian-collab.<subdomain>.workers.dev` to the plugin's signalling
-servers. The `name` in `wrangler.jsonc` is the first label of that host.
+`wss://obsidian-collab.<subdomain>.workers.dev` to the plugin's **Community
+Collab relays**. The `name` in `wrangler.jsonc` is the first label of that host.
 
 ## Keep it private
 
@@ -44,9 +46,9 @@ to people you invite, set a token:
 npx wrangler secret put RELAY_TOKEN
 ```
 
-Then the relay only accepts `wss://<host>/<token>`. Use that full URL in the
-signalling servers. Invite URLs carry it to guests, so share them only with
-people who should have it.
+Then the relay only accepts `wss://<host>/<token>`. Use that full URL in
+**Community Collab relays**. Invite URLs carry it to guests, so share them
+only with people who should have it.
 
 Without a token, every path is its own relay: peers on `wss://<host>/a`
 never see peers on `wss://<host>/b`.
