@@ -377,6 +377,25 @@ describe('the mesh', () => {
     }
   });
 
+  // Each share's URL names its own relays, and a second share connected
+  // meanwhile must still meet its peers on them.
+  it('meets peers on its own relays while another room is open', { timeout: 40000 }, async () => {
+    const first = local(newConfig([`${RELAY}/one`]));
+    const config = newConfig([`${RELAY}/two`]);
+    const second = local(config);
+    const peer = new Peer(config);
+    try {
+      expect(await peer.waitText((t) => t === 'hello')).toBe('hello');
+      peer.insert('!');
+      await second.waitText((t) => t === 'hello!');
+      expect(first.provider.peers).toHaveLength(0);
+    } finally {
+      await peer.leave();
+      await second.provider.destroy();
+      await first.provider.destroy();
+    }
+  });
+
   // A peer that shares no relay with another can never signal it, so the
   // two are linked only through a peer on both relays.
   it('forwards updates across a missing link', { timeout: 60000 }, async () => {

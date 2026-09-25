@@ -28,3 +28,27 @@ index 5fca48a..9e79108 100644
  			},
  			track: (track, stream) => this.dispatchTrack(shared, track, stream)
  		});
+diff --git a/node_modules/@trystero-p2p/core/dist/strategy.mjs b/node_modules/@trystero-p2p/core/dist/strategy.mjs
+index f4f11f0..77e8c45 100644
+--- a/node_modules/@trystero-p2p/core/dist/strategy.mjs
++++ b/node_modules/@trystero-p2p/core/dist/strategy.mjs
+@@ -63,7 +63,6 @@ var strategy_default = ({ init, subscribe, announce, deactivate }) => {
+ 		delete roomIdsByToken[appId];
+ 	};
+ 	let didInit = false;
+-	let initPromises = [];
+ 	let offerPool = null;
+ 	let cleanupWatchOnline = noOp;
+ 	return (config, roomId, callbacks) => {
+@@ -207,9 +206,9 @@ var strategy_default = ({ init, subscribe, announce, deactivate }) => {
+ 			isPassive
+ 		};
+ 		const handleMessage = createSignalHandler(ctx);
++		const initRes = init(config);
++		const initPromises = (Array.isArray(initRes) ? initRes : [initRes]).map((value) => Promise.resolve(value));
+ 		if (!didInit) {
+-			const initRes = init(config);
+-			initPromises = (Array.isArray(initRes) ? initRes : [initRes]).map((value) => Promise.resolve(value));
+ 			didInit = true;
+ 			cleanupWatchOnline = config.relayConfig?.manualReconnection ? noOp : watchOnline();
+ 		}
