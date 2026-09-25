@@ -22,6 +22,8 @@ interface Session {
   // The last status, to tell a new attempt or failure from an old one.
   seen: Status;
   peerNotice?: Notice;
+  // The last peer count, replaced by the next so they do not stack.
+  countNotice?: Notice;
   failureTimer?: number;
 }
 
@@ -727,7 +729,12 @@ export default class CollabPlugin extends Plugin {
     if (Date.now() - this.natCheckedAt >= 60000) void this.refreshVerdict();
     const collab = new Collab(this.app, invite, path, rtcConfig(this.settings), this.store);
     collab.setName(this.settings.name);
-    collab.onPeers = (count) => new Notice(notices.peers(count));
+    collab.onPeers = (count) => {
+      const session = this.sessions.get(collab);
+      if (!session) return;
+      session.countNotice?.hide();
+      session.countNotice = new Notice(notices.peers(count));
+    };
     this.collabs.set(collab.id, collab);
     this.sessions.set(collab, { seen: collab.status() });
     this.updateStatus();
@@ -757,6 +764,7 @@ export default class CollabPlugin extends Plugin {
     const session = this.sessions.get(collab);
     this.sessions.delete(collab);
     session?.sync?.dispose();
+    session?.countNotice?.hide();
     if (session) clearAlerts(session);
     await collab.disconnect();
   }
