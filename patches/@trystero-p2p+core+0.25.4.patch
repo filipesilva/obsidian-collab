@@ -11,3 +11,20 @@ index 7340a4f..b5b6ead 100644
  var OfferPool = class {
  	makeOffer;
  	pool = [];
+diff --git a/node_modules/@trystero-p2p/core/dist/shared-peer.mjs b/node_modules/@trystero-p2p/core/dist/shared-peer.mjs
+index 5fca48a..9e79108 100644
+--- a/node_modules/@trystero-p2p/core/dist/shared-peer.mjs
++++ b/node_modules/@trystero-p2p/core/dist/shared-peer.mjs
+@@ -131,10 +131,10 @@ var SharedPeerManager = class {
+ 		peer.setHandlers({
+ 			data: (data) => this.dispatchData(shared, data),
+ 			signal: (signal) => this.dispatchSignal(shared, signal),
+-			close: () => this.clear(appId, peerId, { destroyPeer: false }),
++			close: () => this.clear(appId, peerId, { destroyPeer: true }),
+ 			error: (err) => {
+ 				console.error(`${libName} peer error:`, err);
+-				this.clear(appId, peerId, { destroyPeer: false });
++				this.clear(appId, peerId, { destroyPeer: true });
+ 			},
+ 			track: (track, stream) => this.dispatchTrack(shared, track, stream)
+ 		});

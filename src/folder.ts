@@ -1,7 +1,7 @@
-import { App, TFile, TFolder, normalizePath } from 'obsidian';
+import { App, Notice, TFile, normalizePath } from 'obsidian';
 import type { Collab } from './collab';
-import { markerPath } from './identity';
-import { getText, observeEntries } from './sync';
+import { markerPath, parentPath } from './identity';
+import { getText, observeEntries, type EntryChange } from './sync';
 
 // Keeps a folder collab and the vault folder in agreement: every markdown
 // file in the folder is a doc, entry paths are relative to the folder, and
@@ -35,8 +35,19 @@ export class FolderSync {
     return path.endsWith('.md') && path !== markerPath(this.root) && this.collab.contains(path);
   }
 
-  private add(file: TFile) {
-    return this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
+  private async add(file: TFile) {
+    try {
+      await this.collab.seed(file, crypto.randomUUID(), this.rel(file.path));
+    } catch (e) {
+      this.failed(file.path, e);
+    }
+  }
+
+  // A note that cannot be read or written is reported and skipped, so the
+  // rest of the folder keeps syncing.
+  private failed(path: string, error: unknown) {
+    console.error('collab: could not sync', path, error);
+    new Notice(`Collab: could not sync ${path}. ${String(error)}`, 10000);
   }
 
   // Bind every entry to its file, creating missing files, share local files
@@ -61,12 +72,8 @@ export class FolderSync {
       vault.on('delete', (file) => {
         if (this.busy.delete(file.path)) return;
         if (file.path === this.root || file.path === markerPath(this.root)) return this.onGone();
-        const doc = this.collab.docs.get(file.path);
-        if (doc) this.collab.removeDoc(doc.id);
-        if (file instanceof TFolder) {
-          for (const doc of [...this.collab.docs.values()]) {
-            if (doc.file.path.startsWith(`${file.path}/`)) this.collab.removeDoc(doc.id);
-          }
+        for (const doc of [...this.collab.docs.values()]) {
+          if (doc.file.path === file.path || doc.file.path.startsWith(`${file.path}/`)) this.collab.removeDoc(doc.id);
         }
       }),
       // Runs after the plugin's own rename handler, so the doc is already
@@ -91,7 +98,17 @@ export class FolderSync {
     this.stops = [];
   }
 
-  private async onEntry(id: string, change: 'add' | 'delete' | 'update') {
+  private async onEntry(id: string, change: EntryChange) {
+    const entryPath = this.collab.entryPath(id);
+    const path = this.collab.docById(id)?.file.path ?? (entryPath === undefined ? 'a note' : this.abs(entryPath));
+    try {
+      await this.applyEntry(id, change);
+    } catch (e) {
+      this.failed(path, e);
+    }
+  }
+
+  private async applyEntry(id: string, change: EntryChange) {
     const doc = this.collab.docById(id);
     if (change === 'delete') {
       if (!doc) return;
@@ -125,7 +142,7 @@ export class FolderSync {
   }
 
   private async ensureFolder(path: string) {
-    const parent = path.slice(0, path.lastIndexOf('/'));
+    const parent = parentPath(path);
     if (!parent || this.app.vault.getFolderByPath(parent)) return;
     await this.app.vault.createFolder(parent);
   }

@@ -19,13 +19,15 @@ export type Winner = 'editor' | 'text';
 
 // The two must agree before they are joined. The editor is the freshest
 // local copy and wins on resume; the text wins when joining a live doc.
-// With awareness, peers see each other's cursor and selection.
+// With awareness, peers see each other's cursor and selection. The text
+// skips the editor's filters, as its remote changes do (see patches/):
+// Obsidian drops frontmatter edits while the cursor is in the frontmatter.
 export function bind(view: EditorView, ytext: Y.Text, winner: Winner = 'editor', awareness: Awareness | null = null): void {
   if (winner === 'editor') {
     applyContent(ytext, view.state.doc.toString());
   } else {
     const changes = diffChanges(view.state.doc.toString(), ytext.toString());
-    if (changes.length) view.dispatch({ changes });
+    if (changes.length) view.dispatch({ changes, filter: false });
   }
   view.dispatch({
     effects: compartment.reconfigure([yCollab(ytext, awareness, { undoManager: false }), skipRemoteHistory]),

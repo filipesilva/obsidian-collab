@@ -4,11 +4,11 @@ import { gatherDiagnostics, natCheck } from './diagnostics';
 import { collabExtension } from './editor';
 import { FolderSync } from './folder';
 import { readInvite, readUrl, removeUrl, writeUrl } from './frontmatter';
-import { MARKER, findById, markerPath } from './identity';
+import { MARKER, markerPath, parentPath } from './identity';
 import { Invite, inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
 import { AskUrl, Confirm, ShowText, confirmJoin, confirmRegenerate, createNote } from './join';
 import { checkTurn, describeNat, preferredLiveRelays } from './nat';
-import { RELAY_COUNT, type Status } from './network';
+import { RELAY_COUNT, closeRelays, type Status } from './network';
 import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
 import type { StateStore } from './state';
 import { vaultStore } from './vault-store';
@@ -61,7 +61,7 @@ export default class CollabPlugin extends Plugin {
     const sharedFolder = () => this.sharedFolderOf(activeFile()?.parent ?? null);
     const plainFolder = () => {
       const folder = activeFile()?.parent;
-      return folder && !this.sharedFolderOf(folder) && !this.containsShared(folder) ? folder : null;
+      return folder && this.canShare(folder) ? folder : null;
     };
 
     this.addCommand({
@@ -69,7 +69,7 @@ export default class CollabPlugin extends Plugin {
       name: 'Share file',
       checkCallback: (checking) => {
         const file = activeFile();
-        if (!file || file.name === MARKER || readUrl(this.app, file) || this.collabOf(file.path)) return false;
+        if (!file || !this.canShare(file)) return false;
         if (!checking) void this.shareFile(file);
         return true;
       },
@@ -251,8 +251,9 @@ export default class CollabPlugin extends Plugin {
   }
 
   onunload() {
-    for (const collab of this.collabs.values()) void this.teardown(collab);
+    const teardowns = [...this.collabs.values()].map((collab) => this.teardown(collab));
     this.collabs.clear();
+    void Promise.all(teardowns).then(closeRelays);
   }
 
   collabOf(path: string): Collab | undefined {
@@ -266,8 +267,27 @@ export default class CollabPlugin extends Plugin {
     return null;
   }
 
+  // A note belongs to one collab at most. collabOf covers a file just shared,
+  // whose property the metadata cache does not show yet.
+  private canShare(target: TFile | TFolder): boolean {
+    if (target instanceof TFolder) return !this.sharedFolderOf(target) && !this.containsShared(target);
+    return target.name !== MARKER && !readUrl(this.app, target) && !this.collabOf(target.path) && !this.sharedFolderOf(target.parent);
+  }
+
+  // The nearest shared folder above a path, found by path so the path need
+  // not exist yet.
+  private sharedAbove(path: string): string | null {
+    while (path) {
+      path = parentPath(path);
+      if (this.app.vault.getFileByPath(markerPath(path))) return path;
+    }
+    return null;
+  }
+
   private containsShared(folder: TFolder): boolean {
-    return folder.children.some((child) => (child instanceof TFolder ? this.containsShared(child) : child.name === MARKER));
+    return folder.children.some((child) =>
+      child instanceof TFolder ? this.containsShared(child) : child instanceof TFile && (child.name === MARKER || !!readUrl(this.app, child)),
+    );
   }
 
   private markerOf(folder: TFolder): TFile | null {
@@ -293,7 +313,7 @@ export default class CollabPlugin extends Plugin {
       const invite = this.folderInvite(folder);
       if (invite) menu.addItem((item) => item.setTitle('Regenerate folder URL').setIcon('refresh-cw').onClick(() => void this.regenerateFolder(folder, invite)));
       menu.addItem((item) => item.setTitle('Stop sharing folder').setIcon('x').onClick(() => void this.stopSharingFolder(folder)));
-    } else if (!this.sharedFolderOf(folder) && !this.containsShared(folder)) {
+    } else if (this.canShare(folder)) {
       menu.addItem((item) => item.setTitle('Share folder').setIcon('users').onClick(() => void this.shareFolder(folder)));
     }
   }
@@ -436,7 +456,7 @@ export default class CollabPlugin extends Plugin {
     invite.file = file.basename;
     await writeUrl(this.app, file, inviteUrl(invite));
     const collab = await this.open(invite, file.path);
-    await collab.seed(file, collab.id);
+    await collab.seed(file, collab.id, '');
     void this.copy(collab.url, file.basename);
     await this.connectWith(collab, file.basename);
   }
@@ -446,7 +466,7 @@ export default class CollabPlugin extends Plugin {
       const ok = await new Confirm(
         this.app,
         'Share the whole vault?',
-        'Every Markdown file in this vault will sync with everyone who joins, and no other folder in it can be shared on its own.',
+        'Every Markdown file in this vault will sync with everyone who joins, and no other folder or note in it can be shared on its own.',
         'Share vault',
       ).ask();
       if (!ok) return;
@@ -480,11 +500,12 @@ export default class CollabPlugin extends Plugin {
     }
     if (invite.folder === undefined) {
       // A note with this id may already be here from an earlier join.
-      const known = findById(
-        this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, url: readUrl(this.app, file) })),
-        invite.id,
-      );
-      const existing = known && this.app.vault.getFileByPath(known.path);
+      const existing = this.app.vault.getMarkdownFiles().find((file) => readInvite(this.app, file)?.id === invite.id);
+      // A new note goes at the vault root.
+      if (!existing && this.sharedFolderOf(this.app.vault.getRoot())) {
+        new Notice('Collab: the whole vault is shared, and a note can only be in one share.', 10000);
+        return;
+      }
       if (!confirmed && !(await confirmJoin(this.app, invite, !!existing))) return;
       if (existing) {
         await this.app.workspace.getLeaf(false).openFile(existing);
@@ -501,20 +522,32 @@ export default class CollabPlugin extends Plugin {
     }
     const path = invite.folder;
     const existing = path ? this.app.vault.getFolderByPath(path) : this.app.vault.getRoot();
-    const known = !!existing && this.folderInvite(existing)?.id === invite.id;
-    if (!confirmed && !(await confirmJoin(this.app, invite, known))) return;
-    if (existing) {
-      if (!known) {
-        new Notice(`Collab: "${path || '/'}" already exists. Move it away first, the shared folder must use that path.`, 10000);
-        return;
-      }
-      await this.adoptFolder(existing, invite);
+    const known = existing && this.folderInvite(existing)?.id === invite.id ? existing : null;
+    const above = known ? null : this.sharedAbove(path);
+    if (above !== null) {
+      new Notice(`Collab: "${path}" would be inside the shared ${above ? `folder "${above}"` : 'vault'}, and a note can only be in one share.`, 10000);
+      return;
+    }
+    // The vault root always exists. With no notes in it, it is as good as new.
+    const taken = path ? !!existing : this.app.vault.getMarkdownFiles().length > 0;
+    if (!known && taken) {
+      new Notice(
+        path
+          ? `Collab: "${path}" already exists. Move it away first, the shared folder must use that path.`
+          : 'Collab: this URL shares a whole vault. Open it in a vault with no notes.',
+        10000,
+      );
+      return;
+    }
+    if (!confirmed && !(await confirmJoin(this.app, invite, !!known))) return;
+    if (known) {
+      await this.adoptFolder(known, invite);
       return;
     }
     await this.store.remove(invite.id);
-    await this.app.vault.createFolder(path);
+    const folder = existing ?? (await this.app.vault.createFolder(path));
     await this.writeMarker(path, inviteUrl(invite));
-    await this.connectFolder(this.app.vault.getFolderByPath(path)!, invite, true);
+    await this.connectFolder(folder, invite, true);
   }
 
   // The file has the property.
@@ -529,15 +562,16 @@ export default class CollabPlugin extends Plugin {
       file.basename,
       fresh,
       () => collab.waitFor(collab.id),
-      async () => (await collab.attach(file, collab.id)).ready,
+      async () => {
+        await collab.attach(file, collab.id);
+      },
     );
   }
 
   // The invite is passed when the marker was just written, since the
   // metadata cache lags behind.
   async connectFolder(folder: TFolder, invite?: Invite | null, fresh = false) {
-    const marker = this.markerOf(folder);
-    invite ??= marker && readInvite(this.app, marker);
+    invite ??= this.folderInvite(folder);
     if (!invite || invite.folder === undefined) {
       new Notice(`Collab: ${MARKER} in "${folder.path}" has no valid URL`);
       return;

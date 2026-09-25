@@ -114,6 +114,54 @@ describe('bind', () => {
   });
 });
 
+describe('an editor that drops frontmatter edits', () => {
+  // With properties shown, Obsidian drops an edit inside the frontmatter
+  // while the cursor is in it. A reduced copy of that filter.
+  const properties = EditorState.transactionFilter.of((tr) => {
+    const end = tr.startState.doc.toString().indexOf('\n---', 3) + 4;
+    if (!tr.docChanged || end < 4 || tr.newSelection.main.head > end) return tr;
+    let inside = false;
+    tr.changes.iterChangedRanges((from, to) => {
+      if (from >= 3 && to < end - 1) inside = true;
+    });
+    return inside ? [] : tr;
+  });
+
+  function withProperties(doc: string): EditorView {
+    const view = new EditorView({
+      state: EditorState.create({ doc, extensions: [collabExtension, properties] }),
+      parent: document.body,
+    });
+    views.push(view);
+    return view;
+  }
+
+  it('still drops a local edit there', () => {
+    const view = withProperties('---\nurl: old\n---\nbody');
+    view.dispatch({ changes: { from: 9, to: 12, insert: 'new' } });
+    expect(view.state.doc.toString()).toBe('---\nurl: old\n---\nbody');
+  });
+
+  it('shows a text change there while the cursor is in it', () => {
+    const view = withProperties('---\nurl: old\n---\nbody');
+    const ytext = text('---\nurl: old\n---\nbody');
+    bind(view, ytext);
+    ytext.doc!.transact(() => {
+      ytext.delete(9, 3);
+      ytext.insert(9, 'new');
+      ytext.insert(ytext.length, ' +remote');
+    });
+    expect(view.state.doc.toString()).toBe('---\nurl: new\n---\nbody +remote');
+  });
+
+  it('lets the text win there while the cursor is in it', () => {
+    const view = withProperties('---\nurl: old\n---\nbody');
+    const ytext = text('---\nurl: new\n---\nbody');
+    bind(view, ytext, 'text');
+    expect(view.state.doc.toString()).toBe('---\nurl: new\n---\nbody');
+  });
+});
+
 describe('undo', () => {
   it('reverts local edits only', () => {
     const view = editor('hello');

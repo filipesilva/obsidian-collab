@@ -1,5 +1,4 @@
-import { getRelaySockets } from 'trystero';
-import { pickRelays } from './network';
+import { allRelaySockets, pickRelays, probeRequest } from './network';
 
 // Whether this network can take a direct connection, judged from what STUN
 // reports. One peer connection asks every STUN server from one local
@@ -148,7 +147,7 @@ function answers(url: string, timeout: number): Promise<boolean> {
       resolve(ok);
     };
     const timer = window.setTimeout(() => done(false), timeout);
-    socket.onopen = () => socket.send(JSON.stringify(['REQ', 'probe', { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': ['probe'] }]));
+    socket.onopen = () => socket.send(probeRequest('probe'));
     socket.onmessage = () => done(true);
     socket.onerror = () => done(false);
   });
@@ -157,7 +156,7 @@ function answers(url: string, timeout: number): Promise<boolean> {
 // Whether any of the given websocket servers accepts a connection. An
 // already open one counts, so a live collab answers at once.
 export function probeSockets(urls: string[], timeout = 5000): Promise<boolean> {
-  const open = (getRelaySockets as () => Record<string, WebSocket | undefined>)();
+  const open = allRelaySockets();
   if (Object.values(open).some((socket) => socket?.readyState === WebSocket.OPEN)) return Promise.resolve(true);
   if (!urls.length) return Promise.resolve(false);
   return new Promise((resolve) => {

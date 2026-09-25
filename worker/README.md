@@ -8,8 +8,9 @@ NIP-11 document. Every message is encrypted by the plugin with the room
 secret before it gets here, so this server never sees connection details or
 document content.
 
-You do not need one. The plugin ships with public Nostr relays. Run your own
-when you want signalling under your control, or for offline use on a LAN.
+You do not need one. The plugin ships with the author's deployment of this
+Worker and with public Nostr relays. Run your own when you want signalling
+under your control, or for offline use on a LAN.
 
 ## Run locally
 
@@ -18,8 +19,8 @@ npm install
 npm run dev
 ```
 
-Add `ws://localhost:8787` to the plugin's **Community Collab relays**, or
-`ws://<lan ip>:8787` with `npm run dev -- --ip 0.0.0.0` for a phone on the
+Replace the plugin's **Community Collab relays** with `ws://localhost:8787`,
+or `ws://<lan ip>:8787` with `npm run dev -- --ip 0.0.0.0` for a phone on the
 same network. Empty **Public Nostr relays** as well to keep a room fully
 local.
 

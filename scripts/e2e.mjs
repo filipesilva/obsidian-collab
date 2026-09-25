@@ -1,5 +1,6 @@
-// End to end: runs the collab checks from CHECKLIST.md against the three dev
-// vaults by driving them with the Obsidian CLI. Usage: npm run e2e, or
+// End to end: the collab flows (share, join, edit, regenerate, folders, TURN)
+// across the three dev vaults, driven by the Obsidian CLI. CHECKLIST.md holds
+// what this cannot check. Usage: npm run e2e, or
 // E2E_ONLY=relay npm run e2e for the steps whose name contains 'relay'.
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -227,6 +228,11 @@ for (const vault of ALL) setTurn(vault, false);
 
 await cleanup();
 for (const vault of ALL) cli(`vault=${VAULTS[vault].name}`, 'plugin:reload', 'id=obsidian-collab');
+// The plugin reports a note it could not sync with console.error, which
+// dev:errors does not see. The hook stays in the window across runs.
+for (const vault of ALL) {
+  run(vault, `window.__collabErrors=[]; if (!window.__collabHooked) { window.__collabHooked=true; const e=console.error; console.error=(...a)=>{ if (String(a[0]).startsWith('collab:')) window.__collabErrors.push(a.map(String).join(' ')); e(...a); }; } 'hooked'`);
+}
 await sleep(1500);
 
 await step('status bar starts at 0 connected', async () => {
@@ -287,6 +293,9 @@ await step('regenerate the file URL in a, b updates by url', async () => {
   // Apart now, both keep editing. Nothing may be lost when b comes over.
   typeIn('a', ' +a-apart');
   typeIn('b', ' +b-apart');
+  // In the frontmatter, as in a freshly opened note. With properties shown,
+  // Obsidian drops edits there that do not skip its filters.
+  run('b', `app.workspace.activeEditor.editor.setCursor({line:0, ch:0}); 'start'`);
   await sleep(1000);
   await joinIn('b', fresh);
   await until('peers on both sides', () => collabs('a')[0]?.peers === 1 && collabs('b')[0]?.peers === 1, 30000);
@@ -436,6 +445,10 @@ await step('no plugin errors', async () => {
   const after = cli('dev:errors');
   const fresh = after.replace(errorsBefore, '');
   assert(!/obsidian-collab/.test(fresh), `new errors:\n${fresh.slice(0, 500)}`);
+  for (const vault of ALL) {
+    const logged = run(vault, `window.__collabErrors.join('\\n')`);
+    assert(!logged, `${vault} logged:\n${logged.slice(0, 500)}`);
+  }
 });
 
 await cleanup();

@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import { afterEach, describe, expect, it } from 'vitest';
-import { getRelaySockets } from 'trystero';
+import { resumeRelayReconnection } from 'trystero';
 import * as Y from 'yjs';
-import { DEFAULT_RELAYS, Provider, RELAY_COUNT, type RoomOptions, pickRelays } from './network';
+import { DEFAULT_RELAYS, Provider, RELAY_COUNT, type RoomOptions, allRelaySockets as sockets, closeRelays, pickRelays } from './network';
 
 // The test worker serves one isolated relay per path.
 const RELAY = 'ws://localhost:8788';
@@ -12,6 +12,17 @@ const LOCAL_TURN: RTCIceServer = { urls: 'turn:127.0.0.1:3479', username: 'colla
 
 // The provider's upkeep cycles, shortened so a test sees several of them.
 const QUICK = { alone: 3000, relayCheck: 3000 };
+
+// Every peer connection this page makes, to find the ones left open.
+const made: RTCPeerConnection[] = [];
+const NativePeerConnection = window.RTCPeerConnection;
+window.RTCPeerConnection = class extends NativePeerConnection {
+  constructor(config?: RTCConfiguration) {
+    super(config);
+    made.push(this);
+  }
+};
+const openSince = (from: number) => made.slice(from).filter((pc) => pc.connectionState !== 'closed').length;
 
 interface PeerMessage {
   type: 'ready' | 'peers' | 'text';
@@ -155,6 +166,10 @@ async function syncWithPeer(relays: string[], sabotage: (provider: Provider) => 
   return me.provider;
 }
 
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
 describe('browser runtime', () => {
   it('has no Node globals, like Obsidian mobile', () => {
     expect(typeof Buffer).toBe('undefined');
@@ -183,10 +198,6 @@ describe('pickRelays', () => {
 });
 
 describe('Provider', () => {
-  afterEach(() => {
-    document.body.innerHTML = '';
-  });
-
   it('is not reachable when no relay answers', { timeout: 15000 }, async () => {
     const provider = new Provider(new Y.Doc(), { room: 'r', secret: 's', relays: ['ws://localhost:1'], timing: { reachable: 1500 } });
     expect(await provider.reachable).toBe(false);
@@ -248,7 +259,6 @@ describe('Provider', () => {
   }
 
   it('leaves a healthy relay socket alone when checked', { timeout: 40000 }, async () => {
-    const sockets = getRelaySockets as () => Record<string, WebSocket>;
     await syncWithPeer(LOCAL_RELAYS, async (provider) => {
       const socket = sockets()[RELAY]!;
       while (socket.readyState !== WebSocket.OPEN) await new Promise((r) => setTimeout(r, 20));
@@ -260,7 +270,6 @@ describe('Provider', () => {
   });
 
   it('recovers from a relay socket that looks open but is dead', { timeout: 40000 }, async () => {
-    const sockets = getRelaySockets as () => Record<string, WebSocket>;
     // Record the subscriptions Trystero opens, so the zombie can drop them:
     // a dead socket neither sends nor receives anything.
     const subs = new Map<WebSocket, string[]>();
@@ -297,10 +306,6 @@ describe('Provider', () => {
 });
 
 describe('the mesh', () => {
-  afterEach(() => {
-    document.body.innerHTML = '';
-  });
-
   it('converges with three peers and edits from each', { timeout: 60000 }, async () => {
     const config = newConfig(LOCAL_RELAYS);
     const me = local(config);
@@ -372,10 +377,6 @@ describe('the mesh', () => {
 });
 
 describe('TURN', () => {
-  afterEach(() => {
-    document.body.innerHTML = '';
-  });
-
   // The page's peer may only use relay candidates, as with Always relay on
   // a strict network. The other peer needs nothing: it reaches the relay.
   it('syncs through the relay when direct paths are not allowed', { timeout: 60000 }, async () => {
@@ -414,11 +415,45 @@ describe('TURN', () => {
   });
 });
 
-describe('rejoining', () => {
-  afterEach(() => {
-    document.body.innerHTML = '';
+describe('cleanup', () => {
+  it('leaves no peer connection open once both leave', { timeout: 40000 }, async () => {
+    const from = made.length;
+    const config = newConfig(LOCAL_RELAYS);
+    const me = local(config);
+    const peer = new Peer(config);
+    try {
+      await peer.waitText((t) => t === 'hello');
+    } finally {
+      await peer.leave();
+      await me.provider.destroy();
+    }
+    await until(() => openSince(from) === 0, `${openSince(from)} of ${made.length - from} peer connections left open`, 10000);
   });
 
+  // As a regenerated URL does: both move to a new room, then leave.
+  it('leaves no peer connection open after moving to a new room', { timeout: 60000 }, async () => {
+    const from = made.length;
+    const config = newConfig(LOCAL_RELAYS);
+    const me = local(config);
+    const peer = new Peer(config);
+    let again: Provider | null = null;
+    try {
+      await peer.waitText((t) => t === 'hello');
+      const next = { room: crypto.randomUUID(), secret: crypto.randomUUID() };
+      await me.provider.destroy();
+      again = new Provider(me.doc, { ...config, ...next });
+      peer.rejoin(next.room, next.secret);
+      await until(() => again!.peers.length === 1 && peer.peers === 1, 'never reconnected', 20000);
+    } finally {
+      await peer.leave();
+      await again?.destroy();
+      await me.provider.destroy();
+    }
+    await until(() => openSince(from) === 0, `${openSince(from)} of ${made.length - from} peer connections left open`, 10000);
+  });
+});
+
+describe('rejoining', () => {
   // Alone, the provider rejoins every so often to announce again. A peer
   // that arrives after that must still connect, and a connected pair must
   // not be disturbed by the cycle. QUICK makes it 3 s, not 10 s and 30 s.
@@ -483,6 +518,23 @@ describe('rejoining', () => {
       }
     } finally {
       await peer.leave();
+    }
+  });
+});
+
+// Last, as it closes every relay socket of this page.
+describe('unloading', () => {
+  it('closes relay sockets and keeps them closed', { timeout: 20000 }, async () => {
+    const provider = new Provider(new Y.Doc(), newConfig(LOCAL_RELAYS));
+    try {
+      expect(await provider.reachable).toBe(true);
+      await provider.destroy();
+      closeRelays();
+      // Longer than Trystero waits before reopening a closed socket.
+      await new Promise((r) => setTimeout(r, 4000));
+      expect(Object.values(sockets()).map((socket) => socket.readyState)).toEqual(Object.values(sockets()).map(() => WebSocket.CLOSED));
+    } finally {
+      resumeRelayReconnection();
     }
   });
 });

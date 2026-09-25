@@ -52,7 +52,7 @@ function describe(invite: Invite): { kind: string; what: string } {
 // With known, the share is already here and the URL replaces its stored one.
 export function confirmJoin(app: App, invite: Invite, known = false): Promise<boolean> {
   const { kind, what } = describe(invite);
-  const relays = `Peers find each other through ${invite.relays.join(', ')}, which only relay connection setup and cannot read the content.`;
+  const relays = `Peers find each other through ${invite.relays.join(', ')}. Relays see your IP address and a room id, never the notes.`;
   if (known) {
     return new Confirm(app, `Update shared ${kind} URL`, `This URL is for ${what}, which is already shared here. It replaces the stored one and connects with it. ${relays}`, 'Update').ask();
   }

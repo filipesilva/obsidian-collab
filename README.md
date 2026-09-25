@@ -3,11 +3,26 @@
 Peer-to-peer collaborative editing of Obsidian files and folders.
 Yjs CRDT over WebRTC. No server ever holds document data.
 
-See [TODO.md](TODO.md) for the plan.
-
 Peers see each other's cursor and selection, with the name set in the plugin
 settings. The name and cursor go only to the peers of a collab, the same way
 edits do.
+
+## Use
+
+Everyone who edits needs the plugin.
+
+1. Open a note and run **Share file**. Its URL is copied, and kept in the
+   note's `collab-url` property.
+2. Send the URL to the others.
+3. They select the link, or paste it into **Open collab URL**. The note is
+   created in their vault and opened.
+
+To share a folder, right-click it and select **Share folder**. Every Markdown
+file in it syncs, other files do not. The URL is kept in a `collab.md` note
+in the folder, and the others get the folder at the same path.
+
+Edits sync while at least two of you are connected. After a restart, run
+**Connect file** or **Connect folder** to connect again.
 
 ## Connectivity
 
@@ -22,14 +37,17 @@ five of them, and its URL tells guests which, so both sides meet. Relays see
 your IP address, an id and encrypted connection offers.
 
 There are two lists. **Community Collab relays** are run for Collab by its
-users, and a new share takes every one of them that answers. **Public Nostr
+users, and a new share takes every one of them that answers. The list starts
+with `wss://obsidian-collab.filipesilva.workers.dev`, the plugin author's
+deployment of the Worker in [worker/](worker/README.md). **Public Nostr
 relays** fill it up to five. The public list starts as the relays that
 [Trystero](https://github.com/dmotz/trystero) uses.
 
 To run your own, deploy the Worker in [worker/](worker/README.md), or use
 any Nostr relay, and put its URL in **Community Collab relays**. To keep a
-shared file or folder on your relay alone, including offline on a LAN, also
-empty **Public Nostr relays**. Reset restores both lists.
+shared file or folder on your relay alone, including offline on a LAN, make
+it the only line in **Community Collab relays** and empty **Public Nostr
+relays**. Reset restores both lists.
 
 A share's URL fixes its relays. To move a share to other relays, or to lock
 out someone who has the URL, one peer runs **Regenerate file URL** or
@@ -77,7 +95,7 @@ npm run build   # typecheck and bundle main.js
 npm test        # fast tests in headless Chromium, no servers
 npm run test-network  # network tests: local relay and TURN, plus public relays
 npm run lint
-npm run e2e     # end to end, drives two open dev vaults through the checklist
+npm run e2e     # end to end in test-vaults/one, two and three; needs Obsidian running and npm run build
 ```
 
 Tests run in a real browser with no Node globals, because Obsidian mobile

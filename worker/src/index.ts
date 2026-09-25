@@ -113,11 +113,11 @@ export class Relay implements DurableObject {
       return;
     }
     if (!Array.isArray(message)) return;
-    const subs = ws.deserializeAttachment() as Subscriptions;
     const [type, arg, ...rest] = message as unknown[];
     switch (type) {
       case 'REQ': {
         if (typeof arg !== 'string') return;
+        const subs = ws.deserializeAttachment() as Subscriptions;
         const filters = rest.filter((f): f is Filter => typeof f === 'object' && f !== null);
         subs[arg] = filters;
         ws.serializeAttachment(subs);
@@ -127,6 +127,7 @@ export class Relay implements DurableObject {
       }
       case 'CLOSE': {
         if (typeof arg !== 'string') return;
+        const subs = ws.deserializeAttachment() as Subscriptions;
         delete subs[arg];
         ws.serializeAttachment(subs);
         this.remove(ws, arg);

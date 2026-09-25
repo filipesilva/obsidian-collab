@@ -1,7 +1,7 @@
 {
   "name": "obsidian-collab-worker",
   "version": "1.0.0",
-  "description": "Signaling and TURN credential Worker for obsidian-collab",
+  "description": "Signalling relay Worker for obsidian-collab",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

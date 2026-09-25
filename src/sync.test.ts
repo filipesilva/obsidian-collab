@@ -182,6 +182,9 @@ describe('observeDocs', () => {
   it('reports replaced entries after the transaction settles', async () => {
     const a = new Y.Doc();
     const b = new Y.Doc();
+    // The higher client id wins a concurrent map set, so b's entry is replaced.
+    a.clientID = 2;
+    b.clientID = 1;
     const net = link(a, b);
     openDoc(a, { ...note, content: 'from a' });
     const tb = openDoc(b, { ...note, content: 'from b' });
@@ -190,7 +193,7 @@ describe('observeDocs', () => {
     net.connect();
     expect(seen).toEqual([]);
     await Promise.resolve();
-    if (getText(b, note.id) === tb) return;
+    expect(getText(b, note.id)).not.toBe(tb);
     expect(seen).toEqual([note.id]);
   });
 });

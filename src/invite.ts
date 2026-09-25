@@ -1,3 +1,5 @@
+import { toBase64UrlEncoded } from 'lib0/buffer';
+
 export interface Invite {
   relays: string[];
   id: string;
@@ -50,6 +52,5 @@ export function parseInvite(params: Record<string, string>): Invite | null {
 }
 
 export function randomId(bytes = 12): string {
-  const buf = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...buf)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return toBase64UrlEncoded(crypto.getRandomValues(new Uint8Array(bytes)));
 }

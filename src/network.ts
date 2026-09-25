@@ -1,4 +1,4 @@
-import { defaultRelayUrls, getRelaySockets, joinRoom, selfId, type MessageAction, type Room } from 'trystero';
+import { defaultRelayUrls, getRelaySockets, joinRoom, pauseRelayReconnection, selfId, type MessageAction, type Room } from 'trystero';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness';
@@ -36,8 +36,21 @@ export interface RoomOptions {
   timing?: Partial<typeof TIMING>;
 }
 
-// Every peer must dial the same relays to meet, so the host picks a few and
-// the invite link carries them.
+// Every relay socket Trystero holds, by URL. Trystero types it as any.
+export const allRelaySockets = getRelaySockets as () => Record<string, WebSocket>;
+
+// Relay sockets outlive rooms, and Trystero reopens any that close. A plugin
+// that unloads must stop both, or every reload leaves a set of sockets open.
+export function closeRelays(): void {
+  pauseRelayReconnection();
+  for (const socket of Object.values(allRelaySockets())) socket.close();
+}
+
+// A subscription a live relay answers at once, in one way or another.
+export function probeRequest(id: string): string {
+  return JSON.stringify(['REQ', id, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [id] }]);
+}
+
 export function pickRelays(relays: string[], count = RELAY_COUNT): string[] {
   const pool = [...relays];
   for (let i = pool.length - 1; i > 0; i--) {
@@ -76,12 +89,13 @@ export class Provider {
   private resolveReachable!: (ok: boolean) => void;
   // Whether any relay answered. Settled by the first reply, or the timeout.
   readonly reachable: Promise<boolean>;
+  private resolveSynced!: () => void;
+  // Settled by the first full sync with any peer.
+  readonly synced = new Promise<true>((resolve) => (this.resolveSynced = () => resolve(true)));
   private checkTimer = 0;
   private attemptsAtLastTick = 0;
   private timing: typeof TIMING;
-  private synced = false;
   onPeers: ((count: number) => void) | null = null;
-  onSynced: (() => void) | null = null;
   onStatus: ((status: Status) => void) | null = null;
 
   constructor(
@@ -247,7 +261,7 @@ export class Provider {
       const onMessage = () => done(true);
       const timer = window.setTimeout(() => done(false), this.timing.relayProbe);
       socket.addEventListener('message', onMessage);
-      socket.send(JSON.stringify(['REQ', id, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [id] }]));
+      socket.send(probeRequest(id));
     });
   }
 
@@ -338,7 +352,7 @@ export class Provider {
   }
 
   private relaySockets(): WebSocket[] {
-    const sockets = (getRelaySockets as () => Record<string, WebSocket | undefined>)();
+    const sockets = allRelaySockets();
     return this.opts.relays.map((url) => sockets[url]).filter((socket): socket is WebSocket => !!socket);
   }
 
@@ -376,10 +390,7 @@ export class Provider {
     const encoder = encoding.createEncoder();
     const type = syncProtocol.readSyncMessage(decoding.createDecoder(data), encoder, this.doc, new Received(this, peerId));
     if (encoding.length(encoder) > 0) this.send(encoder, peerId);
-    if (type === syncProtocol.messageYjsSyncStep2 && !this.synced) {
-      this.synced = true;
-      this.onSynced?.();
-    }
+    if (type === syncProtocol.messageYjsSyncStep2) this.resolveSynced();
   }
 
   private send(encoder: encoding.Encoder, target?: string) {

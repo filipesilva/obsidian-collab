@@ -79,11 +79,12 @@ npm run build
 
 ## Testing
 
-- Unit tests: `npm test` runs the fast tests in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once. `npm run test-network` runs `src/network.test.ts` and `src/nat.test.ts`, which take under a minute: it boots the signalling Worker on port 8788 and a local STUN and TURN server on port 3479 (`test/turn-server.mjs`, credentials collab/collab), so those run offline too, relay tests included, and it also enables the tests that go through public Nostr relays. The test browser runs with mDNS candidate hiding off so the local relay can reach real addresses.
+- Unit tests: `npm test` runs the fast tests in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once.
+- Network tests: `npm run test-network` runs `src/network.test.ts` and `src/nat.test.ts` in under a minute. It boots the signalling Worker on port 8788 and a local STUN and TURN server on port 3479 (`test/turn-server.mjs`, credentials collab/collab). Two tests also use public Nostr relays and public STUN, so they fail offline. Skip them with `VITEST_NETWORK=1 npx vitest run`. The test browser runs with mDNS candidate hiding off so the local relay can reach real addresses.
 - Trystero fixes one peer id per page, so tests that need a second peer load `src/test/peer.ts` in an iframe and talk to it with postMessage.
 - Phone vault: `obsidian-collab-phone` in iCloud, at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/obsidian-collab-phone`. iCloud carries it to the phone; the plugin lives at `.obsidian/plugins/obsidian-collab/` in it as copies, not symlinks. After a build that should be tested on the phone, copy `main.js`, `manifest.json` and `styles.css` there with `npm run phone`, then reload the plugin on the phone.
 - Dev vaults: `test-vaults/one`, `two` and `three` in this repo. Open them in Obsidian once so it knows them; after that the e2e opens the ones that are closed by `obsidian://open?path=` and closes those again at the end, so only Obsidian itself needs to be running. `npm run e2e` installs the plugin into them as relative symlinks to the build and enables it, so `npm run build` is picked up on the next reload while settings and collab state stay per vault and out of git.
-- Signalling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Put `ws://localhost:8787` or `ws://<lan ip>:8787` in the plugin's Community Collab relays and empty Public Nostr relays to keep sessions local. Source and deploy notes in `worker/`.
+- Signalling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Make `ws://localhost:8787` or `ws://<lan ip>:8787` the only entry in the plugin's Community Collab relays and empty Public Nostr relays to keep sessions local. Source and deploy notes in `worker/`.
 - Drive Obsidian from the terminal with the CLI. `vault=` must come **before** the command, otherwise it is ignored and the command hits whichever window was focused last:
     ```
     obsidian vault=one plugin:reload id=obsidian-collab
@@ -91,8 +92,8 @@ npm run build
     obsidian dev:errors
     obsidian dev:debug on && obsidian dev:console level=error
     ```
-- `patches/` holds a patch-package change to Trystero: its offer pool is 3 connections instead of 20. Every pooled connection allocates a TURN relay when TURN is configured, and 20 at once starved each other on a phone. `npm install` applies it. Upstream request for a `poolSize` option: https://github.com/dmotz/trystero/issues/197. Drop the patch once a release has it.
-- `CHECKLIST.md` lists the Obsidian-side checks to run after changes to editor binding or collabs. `npm run e2e` runs the collab ones automatically through the CLI against the three dev vaults (`scripts/e2e.mjs`), the end to end tests, including a connection through the local TURN server with Always relay, reached by the machine's LAN address because Electron refuses a loopback TURN server, so that step needs a network interface up. On a failed step it prints both vaults' diagnostics.
+- `patches/` holds patch-package changes to Trystero (offer pool of 3) and y-codemirror.next (remote changes skip editor filters). `npm install` applies them. Why, and when to drop each: `patches/README.md`.
+- `npm run e2e` (`scripts/e2e.mjs`) covers the collab flows through the CLI against the three dev vaults, including a connection through the local TURN server with Always relay, reached by the machine's LAN address because Electron refuses a loopback TURN server, so that step needs a network interface up. On a failed step it prints every vault's diagnostics. `CHECKLIST.md` lists the checks e2e cannot do; run it after changes to editor binding or the UI.
 
 ## Commands & settings
 

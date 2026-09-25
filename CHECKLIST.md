@@ -30,14 +30,22 @@ the shared doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values(
   under its collab, with the note they are in.
   Change the name while connected, the label follows.
 - Join a folder URL when a folder already exists at that path without the
-  marker. It is refused with a message.
+  marker. It is refused with a message, before any join dialog. A
+  whole-vault URL is refused in a vault with notes, and joins in one without.
+- **Share file** is not offered on a note in a shared folder, connected or
+  not. **Share folder** is not offered on a folder that holds a shared note.
+  Joining a folder URL whose path is inside a shared folder, or a file URL
+  in a vault shared as a whole, is refused with a message.
+- Make a note in a shared folder read-only, then join the folder from a
+  vault that has the note but no history. A notice names the note, and the
+  other notes still sync.
 - The status bar shows how many collabs are connected. Clicking it lists
   them with their peer counts, each disconnects on click, and **Disconnect
   all** empties it. The command does the same.
 - **Check network** reports the verdict in a notice. On a phone on cellular
   it should say symmetric NAT and point at TURN, also on its own when
   connecting without TURN configured.
-- Put the local worker in **Community Collab relays** and empty **Public
-  Nostr relays**. Start and join work with the worker running and nothing
+- Make the local worker the only line in **Community Collab relays** and
+  empty **Public Nostr relays**. Start and join work with the worker running and nothing
   else reachable.
 - Reset a settings list. The defaults come back and the textarea shows them.

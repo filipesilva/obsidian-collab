@@ -71,7 +71,7 @@ export class SharedDoc {
   private async adopt(): Promise<void> {
     this.adopting = true;
     this.rebind();
-    if (!this.view) await this.write();
+    if (!this.view && (await this.app.vault.read(this.file)) !== this.ytext.toString()) await this.write();
     this.adopting = false;
   }
 

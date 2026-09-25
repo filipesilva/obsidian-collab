@@ -1,6 +1,9 @@
 import { App, TFile } from 'obsidian';
-import { PROPERTY } from './identity';
 import { Invite, parseInviteUrl } from './invite';
+
+// A shared file or folder is identified by this property holding its invite
+// URL. The collab id inside is the identity.
+const PROPERTY = 'collab-url';
 
 export function readUrl(app: App, file: TFile): string | undefined {
   const value: unknown = app.metadataCache.getFileCache(file)?.frontmatter?.[PROPERTY];

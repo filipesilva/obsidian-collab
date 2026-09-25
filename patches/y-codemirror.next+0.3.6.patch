@@ -1,0 +1,26 @@
+diff --git a/node_modules/y-codemirror.next/dist/y-codemirror.cjs b/node_modules/y-codemirror.next/dist/y-codemirror.cjs
+index 718a040..31f412a 100644
+--- a/node_modules/y-codemirror.next/dist/y-codemirror.cjs
++++ b/node_modules/y-codemirror.next/dist/y-codemirror.cjs
+@@ -182,7 +182,7 @@ class YSyncPluginValue {
+             pos += d.retain;
+           }
+         }
+-        view.dispatch({ changes, annotations: [ySyncAnnotation.of(this.conf)] });
++        view.dispatch({ changes, annotations: [ySyncAnnotation.of(this.conf)], filter: false });
+       }
+     };
+     this._ytext = this.conf.ytext;
+diff --git a/node_modules/y-codemirror.next/src/y-sync.js b/node_modules/y-codemirror.next/src/y-sync.js
+index dcbf613..07a9039 100644
+--- a/node_modules/y-codemirror.next/src/y-sync.js
++++ b/node_modules/y-codemirror.next/src/y-sync.js
+@@ -118,7 +118,7 @@ class YSyncPluginValue {
+             pos += d.retain
+           }
+         }
+-        view.dispatch({ changes, annotations: [ySyncAnnotation.of(this.conf)] })
++        view.dispatch({ changes, annotations: [ySyncAnnotation.of(this.conf)], filter: false })
+       }
+     }
+     this._ytext = this.conf.ytext

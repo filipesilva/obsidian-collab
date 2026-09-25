@@ -37,8 +37,6 @@ export class Collab {
   // Every wait races `closed`, which resolves false on disconnect.
   private close!: () => void;
   private closed = new Promise<false>((resolve) => (this.close = () => resolve(false)));
-  private gotSync!: () => void;
-  private firstSync = new Promise<true>((resolve) => (this.gotSync = () => resolve(true)));
 
   constructor(
     private app: App,
@@ -81,7 +79,6 @@ export class Collab {
       onStatus(this.status());
       this.onPeers?.(count);
     };
-    this.provider.onSynced = this.gotSync;
     // Relay sockets outlive collabs, so some may be open already.
     onStatus(this.status());
   }
@@ -117,7 +114,7 @@ export class Collab {
   // False on timeout or disconnect.
   waitReachable(): Promise<boolean> {
     if (!this.provider) return Promise.resolve(false);
-    return Promise.race([this.provider.reachable, this.firstSync, this.closed]);
+    return Promise.race([this.provider.reachable, this.provider.synced, this.closed]);
   }
 
   describeConnections(): Promise<string[]> {
@@ -163,12 +160,14 @@ export class Collab {
 
   // Resolves true at the first full sync with any peer, false on disconnect.
   waitSynced(): Promise<boolean> {
-    return Promise.race([this.firstSync, this.closed]);
+    if (!this.provider) return Promise.resolve(false);
+    return Promise.race([this.provider.synced, this.closed]);
   }
 
   // Creates the doc from the file. Only sharing does this: a doc seeded by
-  // someone without history could win over the real one.
-  async seed(file: TFile, id: string, entryPath = file.path): Promise<SharedDoc> {
+  // someone without history could win over the real one. The entry path is
+  // relative to the folder, and empty for a file collab.
+  async seed(file: TFile, id: string, entryPath: string): Promise<SharedDoc> {
     const content = await this.app.vault.read(file);
     return this.track(file, new SharedDoc(this.app, file, id, openDoc(this.ydoc, { id, path: entryPath, content }), this.awareness));
   }
@@ -181,7 +180,9 @@ export class Collab {
     const text = getText(this.ydoc, id);
     if (!text) throw new Error(`collab: no doc ${id}`);
     if (content !== null) applyContent(text, content);
-    return this.track(file, new SharedDoc(this.app, file, id, text, this.awareness, !this.hasState));
+    const doc = this.track(file, new SharedDoc(this.app, file, id, text, this.awareness, !this.hasState));
+    await doc.ready;
+    return doc;
   }
 
   private track(file: TFile, doc: SharedDoc): SharedDoc {
