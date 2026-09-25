@@ -142,6 +142,7 @@ export const settings = {
   stun: 'STUN',
   stunServers: { name: 'Servers', desc: 'Lets peers discover their public address so they can connect directly. One per line.' },
   turn: 'TURN',
+  turnEnabled: { name: 'Enabled', desc: 'Turn off never use TURN even if configured.' },
   turnServer: {
     name: 'Server',
     desc: 'Relays traffic when a direct connection fails, for example on mobile networks. Only the peer behind the strict network needs one, as turn:host:3478. Leave empty unless connections fail.',

@@ -17,7 +17,7 @@ export async function gatherDiagnostics(version: string, settings: CollabSetting
     const nat = await natCheck(settings);
     lines.push(`nat: ${JSON.stringify(nat)} -> ${describeNat(nat)}`);
     const turn = turnServer(settings);
-    lines.push(`turn: ${turn ? `${String(turn.urls)} always=${settings.turn.always}` : 'none'}`);
+    lines.push(`turn: ${turn ? `${String(turn.urls)} always=${settings.turn.always}` : settings.turn.enabled ? 'none' : 'disabled'}`);
     if (turn) lines.push(`turn test: ${await checkTurn(turn)}`);
     const withStun = await listCandidates({ iceServers: [{ urls: settings.stun }] });
     // Candidate lines here start at the component: "1 udp <priority> <address> <port> typ …".

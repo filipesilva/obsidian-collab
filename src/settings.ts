@@ -5,6 +5,8 @@ import { COMMUNITY_RELAYS, DEFAULT_RELAYS, DEFAULT_STUN } from './network';
 import { notices, settings as labels } from './text';
 
 export interface TurnSettings {
+  // Off keeps the fields but connects without TURN.
+  enabled: boolean;
   url: string;
   username: string;
   credential: string;
@@ -25,7 +27,7 @@ export const DEFAULT_SETTINGS: CollabSettings = {
   community: COMMUNITY_RELAYS,
   relays: DEFAULT_RELAYS,
   stun: DEFAULT_STUN,
-  turn: { url: '', username: '', credential: '', always: false },
+  turn: { enabled: true, url: '', username: '', credential: '', always: false },
 };
 
 const DOCS = 'https://github.com/filipesilva/obsidian-collab/blob/master/README.md';
@@ -33,7 +35,10 @@ const DOCS = 'https://github.com/filipesilva/obsidian-collab/blob/master/README.
 // A bare host:port is taken as turn:host:port. Chrome refuses a TURN server
 // without credentials, so the three fields count only together.
 export function turnServer(settings: CollabSettings): RTCIceServer | null {
-  const { url, username, credential } = settings.turn;
+  return settings.turn.enabled ? iceServer(settings.turn) : null;
+}
+
+function iceServer({ url, username, credential }: TurnSettings): RTCIceServer | null {
   if (!url || !username || !credential) return null;
   const urls = /^turns?:/.test(url) ? url : `turn:${url}`;
   return { urls, username, credential };
@@ -119,6 +124,11 @@ export class CollabSettingTab extends PluginSettingTab {
         heading: labels.turn,
         items: [
           {
+            name: labels.turnEnabled.name,
+            desc: labels.turnEnabled.desc,
+            control: { type: 'toggle', key: 'turn.enabled' },
+          },
+          {
             name: labels.turnServer.name,
             desc: this.desc(labels.turnServer.desc, 'turn'),
             control: { type: 'text', key: 'turn.url' },
@@ -147,7 +157,7 @@ export class CollabSettingTab extends PluginSettingTab {
             render: (setting: Setting) => {
               setting.addButton((button) =>
                 button.setButtonText(labels.test.action).onClick(async () => {
-                  const turn = turnServer(settings);
+                  const turn = iceServer(settings.turn);
                   if (!turn) return void new Notice(notices.turnMissing);
                   button.setDisabled(true).setButtonText(labels.test.testing);
                   const ok = await checkTurn(turn);
@@ -168,7 +178,7 @@ export class CollabSettingTab extends PluginSettingTab {
     if (key === 'community') return settings.community.join('\n');
     if (key === 'relays') return settings.relays.join('\n');
     if (key === 'stun') return settings.stun.join('\n');
-    if (key === 'turn.always') return settings.turn.always;
+    if (key === 'turn.enabled' || key === 'turn.always') return settings.turn[key.slice(5) as 'enabled' | 'always'];
     if (key.startsWith('turn.')) return settings.turn[key.slice(5) as 'url' | 'username' | 'credential'];
     return undefined;
   }
@@ -180,7 +190,7 @@ export class CollabSettingTab extends PluginSettingTab {
     else if (key === 'community') settings.community = lines(text);
     else if (key === 'relays') settings.relays = lines(text);
     else if (key === 'stun') settings.stun = lines(text);
-    else if (key === 'turn.always') settings.turn.always = value === true;
+    else if (key === 'turn.enabled' || key === 'turn.always') settings.turn[key.slice(5) as 'enabled' | 'always'] = value === true;
     else if (key.startsWith('turn.')) settings.turn[key.slice(5) as 'url' | 'username' | 'credential'] = text.trim();
     return this.plugin.saveSettings();
   }

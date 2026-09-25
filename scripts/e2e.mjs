@@ -167,7 +167,7 @@ const disconnectAll = (vault) => runAsync(vault, `await ${PLUGIN}.disconnectAll(
 // reached by the machine's LAN address.
 const LAN = Object.values(networkInterfaces()).flat().find((i) => i?.family === 'IPv4' && !i.internal)?.address;
 const setTurn = (vault, on) =>
-  run(vault, `const p=${PLUGIN}; p.settings.turn=${on ? `{url:'turn:${LAN}:3479', username:'collab', credential:'collab', always:true}` : "{url:'', username:'', credential:'', always:false}"}; p.saveSettings(); 'set'`);
+  run(vault, `const p=${PLUGIN}; p.settings.turn=${on ? `{enabled:true, url:'turn:${LAN}:3479', username:'collab', credential:'collab', always:true}` : "{enabled:true, url:'', username:'', credential:'', always:false}"}; p.saveSettings(); 'set'`);
 const errorsBefore = cli('dev:errors');
 
 async function cleanup() {
