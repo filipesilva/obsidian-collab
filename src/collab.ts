@@ -8,6 +8,7 @@ import { Provider, type Status } from './network';
 import { SharedDoc, sourceViews } from './shared-doc';
 import { Persistence, type StateStore } from './state';
 import { DocEntry, applyContent, docs, getText, observeDocs, openDoc } from './sync';
+import { names } from './text';
 
 // Our colour for this run of the plugin, the same in every collab. It
 // travels with the name, so everyone sees a peer in the same colour.
@@ -92,7 +93,7 @@ export class Collab {
   }
 
   setName(name: string): void {
-    const user = { name: name || 'Anonymous', color: `hsl(${HUE}, 70%, 40%)`, colorLight: `hsla(${HUE}, 70%, 40%, 0.25)` };
+    const user = { name: name || names.anonymous, color: `hsl(${HUE}, 70%, 40%)`, colorLight: `hsla(${HUE}, 70%, 40%, 0.25)` };
     this.awareness.setLocalStateField('user', user);
   }
 
@@ -101,7 +102,7 @@ export class Collab {
     const out: Peer[] = [];
     for (const [client, state] of this.awareness.getStates()) {
       if (client === this.awareness.clientID) continue;
-      const { name = 'Anonymous' } = (state.user ?? {}) as Partial<Peer>;
+      const { name = names.anonymous } = (state.user ?? {}) as Partial<Peer>;
       const head = (state.cursor as { head: unknown } | null | undefined)?.head;
       const type = head ? Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(head), this.ydoc)?.type : null;
       const doc = [...this.docs.values()].find((doc) => doc.ytext === type);

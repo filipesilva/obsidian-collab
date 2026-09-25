@@ -3,7 +3,7 @@
   "name": "Collab",
   "version": "0.0.1",
   "minAppVersion": "1.13.0",
-  "description": "Peer-to-peer collaborative editing sessions on notes. Yjs over WebRTC, no server ever holds document data.",
+  "description": "Peer-to-peer collaborative editing sessions on notes, via Yjs over WebRTC.",
   "author": "Filipe Silva",
   "authorUrl": "https://github.com/filipesilva",
   "isDesktopOnly": false

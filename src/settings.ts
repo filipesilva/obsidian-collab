@@ -2,6 +2,7 @@ import { App, Notice, PluginSettingTab, Setting, type SettingDefinitionItem } fr
 import type CollabPlugin from './main';
 import { checkTurn } from './nat';
 import { COMMUNITY_RELAYS, DEFAULT_RELAYS, DEFAULT_STUN } from './network';
+import { notices, settings as labels } from './text';
 
 export interface TurnSettings {
   url: string;
@@ -68,7 +69,7 @@ export class CollabSettingTab extends PluginSettingTab {
       (button: import('obsidian').ExtraButtonComponent) =>
         button
           .setIcon('rotate-ccw')
-          .setTooltip('Reset to defaults')
+          .setTooltip(labels.reset)
           .onClick(() => {
             apply();
             void this.plugin.saveSettings();
@@ -77,60 +78,54 @@ export class CollabSettingTab extends PluginSettingTab {
     ];
     return [
       {
-        name: 'Name',
-        desc: 'Shown to peers next to your cursor.',
+        name: labels.name.name,
+        desc: labels.name.desc,
         control: { type: 'text', key: 'name' },
       },
       {
         type: 'group',
-        heading: 'Signalling',
+        heading: labels.signalling,
         extraButtons: reset(() => {
           settings.community = [...COMMUNITY_RELAYS];
           settings.relays = [...DEFAULT_RELAYS];
         }),
         items: [
           {
-            name: 'Community Collab relays',
-            desc: this.desc(
-              'Relays run for Collab by its users, one per line. A new collab dials five relays and its URL tells guests which. It takes these first. Relays see your IP address and a room id, never the notes.',
-              'signalling',
-            ),
+            name: labels.community.name,
+            desc: this.desc(labels.community.desc, 'signalling'),
             control: { type: 'textarea', key: 'community', rows: 3 },
           },
           {
-            name: 'Public Nostr relays',
-            desc: 'Used to fill up to five when the community relays are not enough, one per line.',
+            name: labels.relays.name,
+            desc: labels.relays.desc,
             control: { type: 'textarea', key: 'relays', rows: 5 },
           },
         ],
       },
       {
         type: 'group',
-        heading: 'STUN',
+        heading: labels.stun,
         extraButtons: reset(() => (settings.stun = [...DEFAULT_STUN])),
         items: [
           {
-            name: 'Servers',
-            desc: this.desc('Help peers discover their public address so they can connect directly, one per line.', 'stun'),
+            name: labels.stunServers.name,
+            desc: this.desc(labels.stunServers.desc, 'stun'),
             control: { type: 'textarea', key: 'stun', rows: 5 },
           },
         ],
       },
       {
         type: 'group',
-        heading: 'TURN',
+        heading: labels.turn,
         items: [
           {
-            name: 'Server',
-            desc: this.desc(
-              'Relays traffic when a direct connection fails, for example on mobile networks. Only the peer behind the strict network needs one, as turn:host:3478. Leave empty unless connections fail.',
-              'turn',
-            ),
+            name: labels.turnServer.name,
+            desc: this.desc(labels.turnServer.desc, 'turn'),
             control: { type: 'text', key: 'turn.url' },
           },
-          { name: 'Username', control: { type: 'text', key: 'turn.username' } },
+          { name: labels.username, control: { type: 'text', key: 'turn.username' } },
           {
-            name: 'Credential',
+            name: labels.credential,
             render: (setting: Setting) => {
               setting.addText((text) => {
                 text.inputEl.type = 'password';
@@ -142,22 +137,22 @@ export class CollabSettingTab extends PluginSettingTab {
             },
           },
           {
-            name: 'Always relay',
-            desc: 'Skip direct connection attempts and always go through the TURN server. For networks where direct connections keep failing.',
+            name: labels.always.name,
+            desc: labels.always.desc,
             control: { type: 'toggle', key: 'turn.always' },
           },
           {
-            name: 'Test',
-            desc: 'Asks the server for a relay with these credentials.',
+            name: labels.test.name,
+            desc: labels.test.desc,
             render: (setting: Setting) => {
               setting.addButton((button) =>
-                button.setButtonText('Test').onClick(async () => {
+                button.setButtonText(labels.test.action).onClick(async () => {
                   const turn = turnServer(settings);
-                  if (!turn) return void new Notice('Collab: fill in the TURN server, username and credential first');
-                  button.setDisabled(true).setButtonText('Testing…');
+                  if (!turn) return void new Notice(notices.turnMissing);
+                  button.setDisabled(true).setButtonText(labels.test.testing);
                   const ok = await checkTurn(turn);
-                  button.setDisabled(false).setButtonText('Test');
-                  new Notice(ok ? 'Collab: TURN works' : 'Collab: TURN did not answer. Check the URL, username and credential.', 8000);
+                  button.setDisabled(false).setButtonText(labels.test.action);
+                  new Notice(ok ? notices.turnTestWorks : notices.turnTestFailed, 8000);
                 }),
               );
             },
@@ -193,7 +188,7 @@ export class CollabSettingTab extends PluginSettingTab {
   private desc(text: string, anchor: string): DocumentFragment {
     return createFragment((fragment) => {
       fragment.appendText(`${text} `);
-      fragment.createEl('a', { text: 'Self-hosting and details.', href: `${DOCS}#${anchor}` });
+      fragment.createEl('a', { text: labels.docsLink, href: `${DOCS}#${anchor}` });
     });
   }
 }

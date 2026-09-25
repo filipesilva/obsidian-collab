@@ -11,11 +11,8 @@ import { checkTurn, describeNat, preferredLiveRelays } from './nat';
 import { RELAY_COUNT, closeRelays, type Status } from './network';
 import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
 import type { StateStore } from './state';
+import { commands, markerBody, modals, names, notices, status } from './text';
 import { vaultStore } from './vault-store';
-
-const MARKER_BODY = `This folder is shared with the Collab plugin. Every markdown file in it syncs
-with everyone who joined the URL above. This file itself is not synced.
-`;
 
 // What the plugin holds for a connected collab, released in teardown.
 interface Session {
@@ -48,7 +45,7 @@ export default class CollabPlugin extends Plugin {
     this.registerObsidianProtocolHandler('collab', (params) => {
       const invite = parseInvite(params);
       if (invite) void this.join(invite, false);
-      else new Notice('Collab: invalid URL');
+      else new Notice(notices.invalidUrl);
     });
 
     const activeFile = () => this.app.workspace.getActiveFile();
@@ -66,7 +63,7 @@ export default class CollabPlugin extends Plugin {
 
     this.addCommand({
       id: 'share-file',
-      name: 'Share file',
+      name: commands.shareFile,
       checkCallback: (checking) => {
         const file = activeFile();
         if (!file || !this.canShare(file)) return false;
@@ -76,7 +73,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'share-folder',
-      name: 'Share folder',
+      name: commands.shareFolder,
       checkCallback: (checking) => {
         const folder = plainFolder();
         if (!folder) return false;
@@ -86,12 +83,12 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'open-url',
-      name: 'Open collab URL',
+      name: commands.openUrl,
       callback: () => void this.joinUrl(),
     });
     this.addCommand({
       id: 'connect-file',
-      name: 'Connect file',
+      name: commands.connectFile,
       checkCallback: (checking) => {
         const file = activeFile();
         const invite = file && fileInvite(file);
@@ -102,7 +99,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'connect-folder',
-      name: 'Connect folder',
+      name: commands.connectFolder,
       checkCallback: (checking) => {
         const folder = sharedFolder();
         if (!folder || this.collabOf(folderPath(folder))) return false;
@@ -112,7 +109,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'copy-file-url',
-      name: 'Copy file URL',
+      name: commands.copyFileUrl,
       checkCallback: (checking) => {
         const file = activeFile();
         const invite = file && fileInvite(file);
@@ -123,7 +120,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'copy-folder-url',
-      name: 'Copy folder URL',
+      name: commands.copyFolderUrl,
       checkCallback: (checking) => {
         const folder = sharedFolder();
         const url = folder && this.folderUrl(folder);
@@ -134,7 +131,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'regenerate-file-url',
-      name: 'Regenerate file URL',
+      name: commands.regenerateFileUrl,
       checkCallback: (checking) => {
         const file = activeFile();
         const invite = file && fileInvite(file);
@@ -145,7 +142,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'regenerate-folder-url',
-      name: 'Regenerate folder URL',
+      name: commands.regenerateFolderUrl,
       checkCallback: (checking) => {
         const folder = sharedFolder();
         const invite = folder && this.folderInvite(folder);
@@ -156,7 +153,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'disconnect-file',
-      name: 'Disconnect file',
+      name: commands.disconnectFile,
       checkCallback: (checking) => {
         const file = activeFile();
         const collab = file && this.collabOf(file.path);
@@ -167,7 +164,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'disconnect-folder',
-      name: 'Disconnect folder',
+      name: commands.disconnectFolder,
       checkCallback: (checking) => {
         const folder = sharedFolder();
         const collab = folder && this.collabOf(folderPath(folder));
@@ -178,7 +175,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'disconnect-all',
-      name: 'Disconnect all',
+      name: commands.disconnectAll,
       checkCallback: (checking) => {
         if (!this.collabs.size) return false;
         if (!checking) void this.disconnectAll();
@@ -187,22 +184,22 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'show-connected',
-      name: 'Show connected',
+      name: commands.showConnected,
       callback: () => void this.connectedSummary().then((text) => new Notice(text, 8000)),
     });
     this.addCommand({
       id: 'diagnostics',
-      name: 'Diagnostics',
+      name: commands.diagnostics,
       callback: () => void this.showDiagnostics(),
     });
     this.addCommand({
       id: 'check-network',
-      name: 'Check network',
+      name: commands.checkNetwork,
       callback: () => void this.checkNetwork(),
     });
     this.addCommand({
       id: 'stop-sharing-file',
-      name: 'Stop sharing file',
+      name: commands.stopSharingFile,
       checkCallback: (checking) => {
         const file = activeFile();
         if (!file || !fileInvite(file)) return false;
@@ -212,7 +209,7 @@ export default class CollabPlugin extends Plugin {
     });
     this.addCommand({
       id: 'stop-sharing-folder',
-      name: 'Stop sharing folder',
+      name: commands.stopSharingFolder,
       checkCallback: (checking) => {
         const folder = sharedFolder();
         if (!folder) return false;
@@ -304,17 +301,17 @@ export default class CollabPlugin extends Plugin {
     const marker = this.markerOf(folder);
     if (marker) {
       if (collab && collab.folder !== null) {
-        menu.addItem((item) => item.setTitle('Disconnect folder').setIcon('unplug').onClick(() => void this.disconnect(collab)));
+        menu.addItem((item) => item.setTitle(commands.disconnectFolder).setIcon('unplug').onClick(() => void this.disconnect(collab)));
       } else {
-        menu.addItem((item) => item.setTitle('Connect folder').setIcon('plug').onClick(() => void this.connectFolder(folder)));
+        menu.addItem((item) => item.setTitle(commands.connectFolder).setIcon('plug').onClick(() => void this.connectFolder(folder)));
       }
       const url = this.folderUrl(folder);
-      if (url) menu.addItem((item) => item.setTitle('Copy folder URL').setIcon('link').onClick(() => void this.copy(url, folderName(folder))));
+      if (url) menu.addItem((item) => item.setTitle(commands.copyFolderUrl).setIcon('link').onClick(() => void this.copy(url, folderName(folder))));
       const invite = this.folderInvite(folder);
-      if (invite) menu.addItem((item) => item.setTitle('Regenerate folder URL').setIcon('refresh-cw').onClick(() => void this.regenerateFolder(folder, invite)));
-      menu.addItem((item) => item.setTitle('Stop sharing folder').setIcon('x').onClick(() => void this.stopSharingFolder(folder)));
+      if (invite) menu.addItem((item) => item.setTitle(commands.regenerateFolderUrl).setIcon('refresh-cw').onClick(() => void this.regenerateFolder(folder, invite)));
+      menu.addItem((item) => item.setTitle(commands.stopSharingFolder).setIcon('x').onClick(() => void this.stopSharingFolder(folder)));
     } else if (this.canShare(folder)) {
-      menu.addItem((item) => item.setTitle('Share folder').setIcon('users').onClick(() => void this.shareFolder(folder)));
+      menu.addItem((item) => item.setTitle(commands.shareFolder).setIcon('users').onClick(() => void this.shareFolder(folder)));
     }
   }
 
@@ -332,16 +329,16 @@ export default class CollabPlugin extends Plugin {
   // or through a TURN relay.
   private async peerSummary(collab: Collab): Promise<string> {
     const paths = await collab.paths();
-    return `${plural(collab.peers, 'peer')}${paths.length ? `, ${paths.join(', ')}` : ''}`;
+    return status.peers(collab.peers, paths);
   }
 
   // One line per collab, then one indented per peer in it, as the menu
   // shows them.
   private async connectedSummary(): Promise<DocumentFragment | string> {
-    if (!this.collabs.size) return 'Collab: nothing connected';
+    if (!this.collabs.size) return notices.nothingConnected;
     const fragment = createFragment();
     for (const collab of this.collabs.values()) {
-      fragment.createDiv({ text: `${collabName(collab)}: ${await this.peerSummary(collab)}` });
+      fragment.createDiv({ text: status.collab(collabName(collab), await this.peerSummary(collab)) });
       for (const peer of collab.others()) fragment.createDiv({ text: peerLine(peer) });
     }
     return fragment;
@@ -351,7 +348,7 @@ export default class CollabPlugin extends Plugin {
   // click for the list.
   private updateStatus() {
     const n = this.collabs.size;
-    this.statusBar.setText(n ? `${n} connected, ${plural(this.peerTotal(), 'peer')}` : '0 connected');
+    this.statusBar.setText(n ? status.some(n, this.peerTotal()) : status.none);
     this.statusBar.toggleClass('mod-clickable', n > 0);
   }
 
@@ -359,7 +356,7 @@ export default class CollabPlugin extends Plugin {
     if (!this.collabs.size) return;
     const menu = new Menu();
     for (const collab of this.collabs.values()) {
-      const title = `Disconnect ${collabName(collab)} (${await this.peerSummary(collab)})`;
+      const title = status.disconnect(collabName(collab), await this.peerSummary(collab));
       menu.addItem((item) =>
         item
           .setTitle(title)
@@ -377,7 +374,7 @@ export default class CollabPlugin extends Plugin {
       }
     }
     menu.addSeparator();
-    menu.addItem((item) => item.setTitle('Disconnect all').setIcon('unplug').onClick(() => void this.disconnectAll()));
+    menu.addItem((item) => item.setTitle(commands.disconnectAll).setIcon('unplug').onClick(() => void this.disconnectAll()));
     menu.showAtMouseEvent(event);
   }
 
@@ -386,10 +383,10 @@ export default class CollabPlugin extends Plugin {
   private async newInvite(id = randomId()): Promise<Invite | null> {
     const { community, relays: publicRelays } = this.settings;
     if (!community.length && !publicRelays.length) {
-      new Notice('Collab: add a relay in settings first');
+      new Notice(notices.addRelay);
       return null;
     }
-    const notice = new Notice('Collab: checking relays…', 0);
+    const notice = new Notice(notices.checkingRelays, 0);
     let relays: string[];
     try {
       relays = await preferredLiveRelays(community, publicRelays, RELAY_COUNT);
@@ -397,7 +394,7 @@ export default class CollabPlugin extends Plugin {
       notice.hide();
     }
     if (!relays.length) {
-      new Notice('Collab: no relay answered. Check the network and the relay lists in settings.', 10000);
+      new Notice(notices.noRelay, 10000);
       return null;
     }
     return { relays, id, secret: randomId(16) };
@@ -463,12 +460,8 @@ export default class CollabPlugin extends Plugin {
 
   async shareFolder(folder: TFolder) {
     if (folder.isRoot()) {
-      const ok = await new Confirm(
-        this.app,
-        'Share the whole vault?',
-        'Every Markdown file in this vault will sync with everyone who joins, and no other folder or note in it can be shared on its own.',
-        'Share vault',
-      ).ask();
+      const { title, text, action } = modals.shareVault;
+      const ok = await new Confirm(this.app, title, text, action).ask();
       if (!ok) return;
     }
     const invite = await this.newInvite();
@@ -487,7 +480,7 @@ export default class CollabPlugin extends Plugin {
     if (url === undefined) return;
     const invite = parseInviteUrl(url);
     if (invite) await this.join(invite, true);
-    else new Notice('Collab: that is not a collab URL');
+    else new Notice(notices.notAUrl);
   }
 
   // Someone else's URL. The first time, creates the file or folder with the
@@ -495,7 +488,7 @@ export default class CollabPlugin extends Plugin {
   // stored one: that is how a regenerated URL gets in.
   async join(invite: Invite, confirmed: boolean) {
     if (this.collabs.get(invite.id)?.url === inviteUrl(invite)) {
-      new Notice('Collab: already connected');
+      new Notice(notices.alreadyConnected);
       return;
     }
     if (invite.folder === undefined) {
@@ -503,7 +496,7 @@ export default class CollabPlugin extends Plugin {
       const existing = this.app.vault.getMarkdownFiles().find((file) => readInvite(this.app, file)?.id === invite.id);
       // A new note goes at the vault root.
       if (!existing && this.sharedFolderOf(this.app.vault.getRoot())) {
-        new Notice('Collab: the whole vault is shared, and a note can only be in one share.', 10000);
+        new Notice(notices.vaultShared, 10000);
         return;
       }
       if (!confirmed && !(await confirmJoin(this.app, invite, !!existing))) return;
@@ -525,18 +518,13 @@ export default class CollabPlugin extends Plugin {
     const known = existing && this.folderInvite(existing)?.id === invite.id ? existing : null;
     const above = known ? null : this.sharedAbove(path);
     if (above !== null) {
-      new Notice(`Collab: "${path}" would be inside the shared ${above ? `folder "${above}"` : 'vault'}, and a note can only be in one share.`, 10000);
+      new Notice(notices.insideShare(path, above), 10000);
       return;
     }
     // The vault root always exists. With no notes in it, it is as good as new.
     const taken = path ? !!existing : this.app.vault.getMarkdownFiles().length > 0;
     if (!known && taken) {
-      new Notice(
-        path
-          ? `Collab: "${path}" already exists. Move it away first, the shared folder must use that path.`
-          : 'Collab: this URL shares a whole vault. Open it in a vault with no notes.',
-        10000,
-      );
+      new Notice(path ? notices.folderExists(path) : notices.vaultNotEmpty, 10000);
       return;
     }
     if (!confirmed && !(await confirmJoin(this.app, invite, !!known))) return;
@@ -553,7 +541,7 @@ export default class CollabPlugin extends Plugin {
   // The file has the property.
   async connectFile(file: TFile, invite: Invite, fresh = false) {
     if (this.collabs.has(invite.id)) {
-      new Notice('Collab: already connected');
+      new Notice(notices.alreadyConnected);
       return;
     }
     const collab = await this.open(invite, file.path);
@@ -573,11 +561,11 @@ export default class CollabPlugin extends Plugin {
   async connectFolder(folder: TFolder, invite?: Invite | null, fresh = false) {
     invite ??= this.folderInvite(folder);
     if (!invite || invite.folder === undefined) {
-      new Notice(`Collab: ${MARKER} in "${folder.path}" has no valid URL`);
+      new Notice(notices.markerInvalid(MARKER, folder.path));
       return;
     }
     if (this.collabs.has(invite.id)) {
-      new Notice('Collab: already connected');
+      new Notice(notices.alreadyConnected);
       return;
     }
     const collab = await this.open(invite, invite.folder);
@@ -609,10 +597,7 @@ export default class CollabPlugin extends Plugin {
 
   // State is a cache. Without it, local edits made meanwhile cannot merge.
   private noHistory(name: string) {
-    new Notice(
-      `Collab: no local history for ${name}. A peer has to be online to send it, and it will replace what is here. Obsidian's file recovery keeps the current version.`,
-      15000,
-    );
+    new Notice(notices.noHistory(name), 15000);
   }
 
   // The network verdict. Shown on request, and folded into the failure
@@ -631,17 +616,17 @@ export default class CollabPlugin extends Plugin {
 
   async checkNetwork() {
     const check = await this.refreshVerdict();
-    new Notice(`Collab: ${describeNat(check)}.`, this.verdict ? 15000 : 5000);
+    new Notice(notices.network(describeNat(check)), this.verdict ? 15000 : 5000);
     const turn = turnServer(this.settings);
     if (!turn || !check.online) return;
     const ok = await checkTurn(turn);
-    new Notice(ok ? 'Collab: TURN works.' : 'Collab: TURN did not answer. Check the URL, username and credential in settings.', ok ? 5000 : 15000);
+    new Notice(ok ? notices.turnWorks : notices.turnFailed, ok ? 5000 : 15000);
   }
 
   async showDiagnostics() {
-    const notice = new Notice('Collab: gathering diagnostics…', 0);
+    const notice = new Notice(notices.gathering, 0);
     try {
-      new ShowText(this.app, 'Collab diagnostics', await this.diagnostics()).open();
+      new ShowText(this.app, modals.diagnostics.title, await this.diagnostics()).open();
     } finally {
       notice.hide();
     }
@@ -658,10 +643,10 @@ export default class CollabPlugin extends Plugin {
   private async connectWith(collab: Collab, name: string, receive?: () => Promise<boolean>) {
     const session = this.sessions.get(collab);
     if (!session) return;
-    const notice = new Notice(`Collab: connecting ${name}…`, 0);
+    const notice = new Notice(notices.connecting(name), 0);
     const connecting = () => {
       const { relays } = collab.status();
-      notice.setMessage(relays ? `Collab: connecting ${name}, ${plural(relays, 'relay')} open…` : `Collab: connecting ${name}…`);
+      notice.setMessage(relays ? notices.connectingRelays(name, relays) : notices.connecting(name));
     };
     try {
       collab.connect((status) => this.onStatus(collab, name, status));
@@ -671,13 +656,13 @@ export default class CollabPlugin extends Plugin {
       session.update = undefined;
       if (!this.sessions.has(collab)) return;
       if (!reachable) {
-        const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
-        new Notice(`Collab: ${name} could not reach any signalling server. Check the network and the signalling list. Still trying…${why}`, 15000);
+        const why = this.verdict ? notices.networkWhy(this.verdict) : '';
+        new Notice(notices.unreachable(name, why), 15000);
       } else if (!receive && !collab.peers) {
         // A peer that arrived while the relays were being probed has
         // already announced itself. Saying "waiting" after that reads
         // backwards, and once one arrives the waiting is over.
-        const waiting = new Notice(`Collab: ${name} ready, waiting for peers…`);
+        const waiting = new Notice(notices.waitingPeers(name));
         session.update = () => {
           if (!collab.peers) return;
           waiting.hide();
@@ -685,13 +670,13 @@ export default class CollabPlugin extends Plugin {
         };
       }
       if (!receive) return;
-      notice.setMessage(`Collab: waiting for someone who has ${name}…`);
+      notice.setMessage(notices.waitingContent(name));
       session.update = () => {
-        if (collab.peers) notice.setMessage(`Collab: receiving ${name}…`);
+        if (collab.peers) notice.setMessage(notices.receiving(name));
       };
       const received = await receive();
       session.update = undefined;
-      if (received) new Notice(`Collab: received ${name}, editing`);
+      if (received) new Notice(notices.received(name));
       else if (this.sessions.has(collab)) await this.disconnect(collab);
     } finally {
       notice.hide();
@@ -716,18 +701,16 @@ export default class CollabPlugin extends Plugin {
         () => {
           clearAlerts(session);
           if (!this.sessions.has(collab) || collab.peers) return;
-          const why = this.verdict ? ` Network check: ${this.verdict}.` : '';
+          const why = this.verdict ? notices.networkWhy(this.verdict) : '';
           new Notice(
-            turn
-              ? `Collab: a peer was found for ${name} but connections keep failing, even with TURN. Test the TURN settings.${why}`
-              : `Collab: a peer was found for ${name} but the connection failed. A TURN server in settings may help.${why}`,
+            turn ? notices.failedWithTurn(name, why) : notices.failed(name, why),
             12000,
           );
         },
         turn ? 20000 : 8000,
       );
     } else if (status.attempts > session.seen.attempts && !session.peerNotice) {
-      session.peerNotice = new Notice(`Collab: peer found for ${name}, connecting…`, 0);
+      session.peerNotice = new Notice(notices.peerFound(name), 0);
     }
     session.seen = status;
     this.updateStatus();
@@ -744,7 +727,7 @@ export default class CollabPlugin extends Plugin {
     if (Date.now() - this.natCheckedAt >= 60000) void this.refreshVerdict();
     const collab = new Collab(this.app, invite, path, rtcConfig(this.settings), this.store);
     collab.setName(this.settings.name);
-    collab.onPeers = (count) => new Notice(count ? `Collab: ${plural(count, 'peer')} connected` : 'Collab: no peers connected');
+    collab.onPeers = (count) => new Notice(notices.peers(count));
     this.collabs.set(collab.id, collab);
     this.sessions.set(collab, { seen: collab.status() });
     this.updateStatus();
@@ -759,7 +742,7 @@ export default class CollabPlugin extends Plugin {
 
   private async writeMarker(folder: string, url: string) {
     const path = markerPath(folder);
-    const marker = this.app.vault.getFileByPath(path) ?? (await this.app.vault.create(path, MARKER_BODY));
+    const marker = this.app.vault.getFileByPath(path) ?? (await this.app.vault.create(path, markerBody));
     await writeUrl(this.app, marker, url);
   }
 
@@ -767,7 +750,7 @@ export default class CollabPlugin extends Plugin {
     if (!this.collabs.delete(collab.id)) return;
     this.updateStatus();
     await this.teardown(collab);
-    new Notice('Collab: disconnected');
+    new Notice(notices.disconnected);
   }
 
   private async teardown(collab: Collab) {
@@ -788,7 +771,7 @@ export default class CollabPlugin extends Plugin {
     if (collab) await this.disconnect(collab);
     await removeUrl(this.app, file);
     if (invite) await this.store.remove(invite.id);
-    new Notice(`Collab: ${file.basename} is no longer shared`);
+    new Notice(notices.unshared(file.basename));
   }
 
   async stopSharingFolder(folder: TFolder) {
@@ -799,7 +782,7 @@ export default class CollabPlugin extends Plugin {
     if (collab) await this.disconnect(collab);
     await this.app.fileManager.trashFile(marker);
     if (invite) await this.store.remove(invite.id);
-    new Notice(`Collab: ${folderName(folder)} is no longer shared`);
+    new Notice(notices.unshared(folderName(folder)));
   }
 
   // The clipboard can stall when the window is not focused. Give up after
@@ -809,9 +792,9 @@ export default class CollabPlugin extends Plugin {
     try {
       const result = await Promise.race([navigator.clipboard.writeText(url), timeout]);
       if (result === 'timeout') throw new Error('clipboard timed out');
-      new Notice(`Collab: URL for ${name} copied`);
+      new Notice(notices.copied(name));
     } catch {
-      new Notice(`Collab: could not copy. The URL for ${name} is in its collab-url property.`, 8000);
+      new Notice(notices.copyFailed(name), 8000);
     }
   }
 
@@ -839,19 +822,15 @@ function folderPath(folder: TFolder): string {
 }
 
 function folderName(folder: TFolder): string {
-  return folder.name || 'the vault';
+  return folder.name || names.vault;
 }
 
 function collabName(collab: Collab): string {
-  return collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || 'the vault';
+  return collab.folder === null ? collab.path.replace(/\.md$/, '') : collab.path || names.vault;
 }
 
 // Indented under its collab. Spaces that survive a native menu, which
 // takes plain strings only.
 function peerLine({ name, path }: Peer): string {
-  return `\u00a0\u00a0\u00a0\u00a0${path ? `${name} in ${path.replace(/\.md$/, '')}` : name}`;
-}
-
-function plural(n: number, word: string): string {
-  return `${n} ${n === 1 ? word : `${word}s`}`;
+  return `\u00a0\u00a0\u00a0\u00a0${path ? status.peerIn(name, path.replace(/\.md$/, '')) : name}`;
 }

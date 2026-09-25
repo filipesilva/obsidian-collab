@@ -1,4 +1,5 @@
 import { allRelaySockets, pickRelays, probeRequest } from './network';
+import { nat } from './text';
 
 // Whether this network can take a direct connection, judged from what STUN
 // reports. One peer connection asks every STUN server from one local
@@ -180,8 +181,8 @@ export function probeSockets(urls: string[], timeout = 5000): Promise<boolean> {
 // Blocked UDP always needs TURN. A symmetric NAT connects only to peers on
 // open networks, so TURN makes it reliable rather than possible.
 export function describeNat(check: NatCheck): string {
-  if (!check.online) return 'no network, will connect when it is back';
-  if (!check.reachable) return 'UDP is blocked here, a TURN server in settings is required';
-  if (check.symmetric) return 'symmetric NAT here, direct connections depend on the other side. A TURN server in settings makes them reliable';
-  return 'direct connections should work';
+  if (!check.online) return nat.offline;
+  if (!check.reachable) return nat.blocked;
+  if (check.symmetric) return nat.symmetric;
+  return nat.ok;
 }

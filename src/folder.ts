@@ -2,6 +2,7 @@ import { App, Notice, TFile, normalizePath } from 'obsidian';
 import type { Collab } from './collab';
 import { markerPath, parentPath } from './identity';
 import { getText, observeEntries, type EntryChange } from './sync';
+import { names, notices } from './text';
 
 // Keeps a folder collab and the vault folder in agreement: every markdown
 // file in the folder is a doc, entry paths are relative to the folder, and
@@ -47,7 +48,7 @@ export class FolderSync {
   // rest of the folder keeps syncing.
   private failed(path: string, error: unknown) {
     console.error('collab: could not sync', path, error);
-    new Notice(`Collab: could not sync ${path}. ${String(error)}`, 10000);
+    new Notice(notices.syncFailed(path, String(error)), 10000);
   }
 
   // Bind every entry to its file, creating missing files, share local files
@@ -100,7 +101,7 @@ export class FolderSync {
 
   private async onEntry(id: string, change: EntryChange) {
     const entryPath = this.collab.entryPath(id);
-    const path = this.collab.docById(id)?.file.path ?? (entryPath === undefined ? 'a note' : this.abs(entryPath));
+    const path = this.collab.docById(id)?.file.path ?? (entryPath === undefined ? names.unknownNote : this.abs(entryPath));
     try {
       await this.applyEntry(id, change);
     } catch (e) {
