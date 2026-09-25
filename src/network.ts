@@ -214,8 +214,10 @@ export class Provider {
   // When Trystero replaces a peer's connection it drops the old one without
   // a leave event, and if the new one never completes, that side keeps
   // believing it is connected and ignores the peer's announces. A peer we
-  // saw join that Trystero no longer lists is that state, as is a listed
-  // peer that stops answering pings. Rejoining renegotiates everything.
+  // saw join that Trystero no longer lists is that state, and rejoining
+  // renegotiates everything. A listed peer that stops answering pings has
+  // only its own connection closed: rejoining for it would cost everyone
+  // theirs, over and over while its path keeps failing.
   async checkPeers(): Promise<void> {
     if (this.destroyed || !this.peerIds.size) return;
     const active = new Set(this.peers);
@@ -234,14 +236,21 @@ export class Provider {
         return Promise.resolve(false);
       }
     };
+    const ids = this.peers;
     const answers = await Promise.all(
-      this.peers.map((id) =>
-        Promise.race([ping(id), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), this.timing.peerPing))]),
-      ),
+      ids.map((id) => Promise.race([ping(id), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), this.timing.peerPing))])),
     );
-    if (this.destroyed || answers.every(Boolean)) return;
-    console.warn('collab: a peer stopped answering, rejoining');
-    await this.rejoin();
+    const silent = ids.filter((_, i) => !answers[i]);
+    if (this.destroyed || !silent.length) return;
+    console.warn('collab: a peer stopped answering, dropping it');
+    const pcs = this.room.getPeers();
+    for (const id of silent) {
+      const pc = pcs[id];
+      if (!pc) continue;
+      // close() fires no event, and Trystero lets go of a peer only on one.
+      pc.close();
+      pc.dispatchEvent(new Event('connectionstatechange'));
+    }
   }
 
   // Whether the relay behind an open socket says anything after a

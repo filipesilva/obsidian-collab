@@ -349,6 +349,34 @@ describe('the mesh', () => {
     }
   });
 
+  // A peer whose connection dies, as a phone's on a flaky path does, must not
+  // cost everyone else theirs.
+  it('drops only the peer that stops answering', { timeout: 40000 }, async () => {
+    const config = newConfig(LOCAL_RELAYS, { peerPing: 1000 });
+    const me = local(config);
+    const b = new Peer(config);
+    const c = new Peer(config);
+    try {
+      await Promise.all([b.waitPeers(2), c.waitPeers(2)]);
+      await until(() => me.provider.peers.length === 2, 'the page never had 2 peers');
+      const [silent, other] = me.provider.peers as [string, string];
+      const room = me.provider['room'];
+      const ping = room.ping.bind(room);
+      room.ping = (id) => (id === silent ? new Promise(() => {}) : ping(id));
+      const kept = room.getPeers()[other];
+      await me.provider.checkPeers();
+      expect(me.provider.peers).toContain(other);
+      expect(room.getPeers()[other]).toBe(kept);
+      await until(() => !me.provider.peers.includes(silent), 'the silent peer was never dropped');
+      room.ping = ping;
+      await until(() => me.provider.peers.includes(silent), 'the silent peer never came back');
+    } finally {
+      await b.leave();
+      await c.leave();
+      await me.provider.destroy();
+    }
+  });
+
   // A peer that shares no relay with another can never signal it, so the
   // two are linked only through a peer on both relays.
   it('forwards updates across a missing link', { timeout: 60000 }, async () => {
