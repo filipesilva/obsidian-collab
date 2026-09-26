@@ -136,3 +136,11 @@ npm run test-network  # network tests: local relay and TURN, plus public relays
 npm run lint
 npm run e2e     # end to end in test-vaults/one, two and three; needs Obsidian running and npm run build
 ```
+
+To publish a new version:
+- run `npm test`, `npm run test-network`, `npm run lint` and `npm run e2e`
+- if the plugin now needs a newer Obsidian, update `minAppVersion` in `manifest.json` first
+- `npm version patch` (or `minor`, `major`) updates `manifest.json` and `versions.json`, commits, and tags without a `v` prefix
+- `git push && git push --tags`
+- the release workflow builds and makes a draft release with `main.js`, `manifest.json` and `styles.css`
+- edit the draft on GitHub, add release notes, and publish it; Obsidian only sees published releases
