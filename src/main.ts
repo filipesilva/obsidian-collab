@@ -221,11 +221,6 @@ export default class CollabPlugin extends Plugin {
       },
     });
 
-    this.registerEvent(
-      this.app.workspace.on('file-menu', (menu, file) => {
-        if (file instanceof TFolder) this.folderMenu(menu, file);
-      }),
-    );
     this.registerEvent(this.app.workspace.on('layout-change', () => this.rebindAll()));
     this.registerEvent(this.app.workspace.on('file-open', () => this.rebindAll()));
     this.registerEvent(
@@ -297,25 +292,6 @@ export default class CollabPlugin extends Plugin {
   private folderUrl(folder: TFolder): string | undefined {
     const marker = this.markerOf(folder);
     return marker ? readUrl(this.app, marker) : undefined;
-  }
-
-  private folderMenu(menu: Menu, folder: TFolder) {
-    const collab = this.collabOf(folderPath(folder));
-    const marker = this.markerOf(folder);
-    if (marker) {
-      if (collab && collab.folder !== null) {
-        menu.addItem((item) => item.setTitle(commands.disconnectFolder).setIcon('unplug').onClick(() => void this.disconnect(collab)));
-      } else {
-        menu.addItem((item) => item.setTitle(commands.connectFolder).setIcon('plug').onClick(() => void this.connectFolder(folder)));
-      }
-      const url = this.folderUrl(folder);
-      if (url) menu.addItem((item) => item.setTitle(commands.copyFolderUrl).setIcon('link').onClick(() => void this.copy(url, folderName(folder))));
-      const invite = this.folderInvite(folder);
-      if (invite) menu.addItem((item) => item.setTitle(commands.regenerateFolderUrl).setIcon('refresh-cw').onClick(() => void this.regenerateFolder(folder, invite)));
-      menu.addItem((item) => item.setTitle(commands.stopSharingFolder).setIcon('x').onClick(() => void this.stopSharingFolder(folder)));
-    } else if (this.canShare(folder)) {
-      menu.addItem((item) => item.setTitle(commands.shareFolder).setIcon('users').onClick(() => void this.shareFolder(folder)));
-    }
   }
 
   private rebindAll() {
