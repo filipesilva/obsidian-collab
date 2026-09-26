@@ -1,7 +1,7 @@
 {
   "id": "collab",
   "name": "Collab",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.13.0",
   "description": "Real-time, end-to-end encrypted, peer-to-peer, collaborative editing across Obsidian vaults for files and folders.",
   "author": "Filipe Silva",
