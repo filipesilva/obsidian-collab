@@ -30,7 +30,7 @@ export const DEFAULT_SETTINGS: CollabSettings = {
   turn: { enabled: true, url: '', username: '', credential: '', always: false },
 };
 
-const DOCS = 'https://github.com/filipesilva/obsidian-collab/blob/master/README.md';
+const SELF_HOSTING = 'https://github.com/filipesilva/obsidian-collab#self-hosting';
 
 // A bare host:port is taken as turn:host:port. Chrome refuses a TURN server
 // without credentials, so the three fields count only together.
@@ -97,7 +97,7 @@ export class CollabSettingTab extends PluginSettingTab {
         items: [
           {
             name: labels.community.name,
-            desc: this.desc(labels.community.desc, 'signalling'),
+            desc: this.desc(labels.community.desc),
             control: { type: 'textarea', key: 'community', rows: 3 },
           },
           {
@@ -114,7 +114,7 @@ export class CollabSettingTab extends PluginSettingTab {
         items: [
           {
             name: labels.stunServers.name,
-            desc: this.desc(labels.stunServers.desc, 'stun'),
+            desc: this.desc(labels.stunServers.desc),
             control: { type: 'textarea', key: 'stun', rows: 5 },
           },
         ],
@@ -130,7 +130,7 @@ export class CollabSettingTab extends PluginSettingTab {
           },
           {
             name: labels.turnServer.name,
-            desc: this.desc(labels.turnServer.desc, 'turn'),
+            desc: this.desc(labels.turnServer.desc),
             control: { type: 'text', key: 'turn.url' },
           },
           { name: labels.username, control: { type: 'text', key: 'turn.username' } },
@@ -195,10 +195,10 @@ export class CollabSettingTab extends PluginSettingTab {
     return this.plugin.saveSettings();
   }
 
-  private desc(text: string, anchor: string): DocumentFragment {
+  private desc(text: string): DocumentFragment {
     return createFragment((fragment) => {
       fragment.appendText(`${text} `);
-      fragment.createEl('a', { text: labels.docsLink, href: `${DOCS}#${anchor}` });
+      fragment.createEl('a', { text: labels.docsLink, href: SELF_HOSTING });
     });
   }
 }
