@@ -7,6 +7,7 @@ import { readInvite, readUrl, removeUrl, writeUrl } from './frontmatter';
 import { MARKER, markerPath, parentPath } from './identity';
 import { Invite, inviteUrl, parseInvite, parseInviteUrl, randomId } from './invite';
 import { AskUrl, Confirm, ShowText, confirmJoin, confirmRegenerate, createNote } from './join';
+import { maskAddresses } from './mask';
 import { checkTurn, describeNat, preferredLiveRelays } from './nat';
 import { RELAY_COUNT, closeRelays, type Status } from './network';
 import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
@@ -628,7 +629,7 @@ export default class CollabPlugin extends Plugin {
   async showDiagnostics() {
     const notice = new Notice(notices.gathering, 0);
     try {
-      new ShowText(this.app, modals.diagnostics.title, await this.diagnostics()).open();
+      new ShowText(this.app, modals.diagnostics.title, maskAddresses(await this.diagnostics())).open();
     } finally {
       notice.hide();
     }
