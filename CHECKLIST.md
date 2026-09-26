@@ -4,7 +4,7 @@
 TURN. What is left here needs a real editor, the UI, or a network the script
 cannot fake. Run it in a dev vault after changes to editor binding or the UI.
 Most steps can be driven from the CLI with `obsidian vault=<name> eval code=...`;
-the shared doc is at `[...app.plugins.plugins['obsidian-collab'].collabs.values()][0].docs.get(path)`.
+the shared doc is at `[...app.plugins.plugins['collab'].collabs.values()][0].docs.get(path)`.
 
 - Share a note that is open in two panes. Type in each pane. Both panes and
   the Y.Text agree at once, disk follows within 3 s.

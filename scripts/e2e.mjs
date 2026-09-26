@@ -21,7 +21,7 @@ const ALL = Object.keys(VAULTS);
 // Puts the built plugin into a vault, as relative symlinks to the build,
 // and enables it. Reloading then picks up every build.
 function installPlugin(dir) {
-  const plugin = join(dir, '.obsidian/plugins/obsidian-collab');
+  const plugin = join(dir, '.obsidian/plugins/collab');
   mkdirSync(plugin, { recursive: true });
   for (const file of ['main.js', 'manifest.json', 'styles.css']) {
     const target = join(plugin, file);
@@ -29,9 +29,9 @@ function installPlugin(dir) {
   }
   const enabled = join(dir, '.obsidian/community-plugins.json');
   const list = existsSync(enabled) ? JSON.parse(readFileSync(enabled, 'utf8')) : [];
-  if (!list.includes('obsidian-collab')) writeFileSync(enabled, JSON.stringify([...list, 'obsidian-collab'], null, 2) + '\n');
+  if (!list.includes('collab')) writeFileSync(enabled, JSON.stringify([...list, 'collab'], null, 2) + '\n');
 }
-const PLUGIN = "app.plugins.plugins['obsidian-collab']";
+const PLUGIN = "app.plugins.plugins['collab']";
 const PREFIX = 'Check';
 
 const results = [];
@@ -137,7 +137,7 @@ function assert(cond, msg) {
 }
 
 const file = (vault, rel) => join(VAULTS[vault].dir, rel);
-const stateDir = (vault) => join(VAULTS[vault].dir, '.obsidian/plugins/obsidian-collab/state');
+const stateDir = (vault) => join(VAULTS[vault].dir, '.obsidian/plugins/collab/state');
 const status = (vault) => run(vault, `[...document.querySelectorAll('.status-bar-item')].map(e=>e.textContent.trim()).find(t=>t.includes('connected'))`);
 const collabs = (vault) => JSON.parse(run(vault, `JSON.stringify([...${PLUGIN}.collabs.values()].map(c=>({id:c.id, path:c.path, peers:c.peers, hasState:c.hasState, docs:[...c.docs.keys()]})))`));
 const urlOf = (vault, path) => run(vault, `${PLUGIN}.constructor && app.metadataCache.getFileCache(app.vault.getFileByPath(${JSON.stringify(path)}))?.frontmatter?.['collab-url'] || ''`);
@@ -221,13 +221,13 @@ for (const [key, v] of Object.entries(VAULTS)) {
   installPlugin(v.dir);
   // A vault opened before the plugin folder existed, or in restricted mode,
   // needs Obsidian to rescan and enable it.
-  await runAsync(key, `if (!app.plugins.isEnabled()) await app.plugins.setEnable(true); await app.plugins.loadManifests(); if (!app.plugins.plugins['obsidian-collab']) await app.plugins.enablePluginAndSave('obsidian-collab'); return !!app.plugins.plugins['obsidian-collab'];`, 30000);
+  await runAsync(key, `if (!app.plugins.isEnabled()) await app.plugins.setEnable(true); await app.plugins.loadManifests(); if (!app.plugins.plugins['collab']) await app.plugins.enablePluginAndSave('collab'); return !!app.plugins.plugins['collab'];`, 30000);
 }
 // Leftover settings must not shape the run.
 for (const vault of ALL) setTurn(vault, false);
 
 await cleanup();
-for (const vault of ALL) cli(`vault=${VAULTS[vault].name}`, 'plugin:reload', 'id=obsidian-collab');
+for (const vault of ALL) cli(`vault=${VAULTS[vault].name}`, 'plugin:reload', 'id=collab');
 // The plugin reports a note it could not sync with console.error, which
 // dev:errors does not see. The hook stays in the window across runs.
 for (const vault of ALL) {
@@ -423,7 +423,7 @@ await step('b connects through TURN with Always relay', async () => {
   setTurn('b', true);
   // Trystero reuses an idle connection to a known peer across rooms, so a
   // fresh plugin instance is needed for the policy to apply.
-  cli(`vault=${VAULTS.b.name}`, 'plugin:reload', 'id=obsidian-collab');
+  cli(`vault=${VAULTS.b.name}`, 'plugin:reload', 'id=collab');
   await sleep(1500);
   try {
     await runAsync('a', `const f=await app.vault.create(${JSON.stringify(RELAY_FILE)}, 'relayed\\n'); await app.workspace.getLeaf(false).openFile(f); await ${PLUGIN}.shareFile(f); return 'shared';`);
@@ -444,7 +444,7 @@ await step('b connects through TURN with Always relay', async () => {
 await step('no plugin errors', async () => {
   const after = cli('dev:errors');
   const fresh = after.replace(errorsBefore, '');
-  assert(!/obsidian-collab/.test(fresh), `new errors:\n${fresh.slice(0, 500)}`);
+  assert(!/plugin:collab\b/.test(fresh), `new errors:\n${fresh.slice(0, 500)}`);
   for (const vault of ALL) {
     const logged = run(vault, `window.__collabErrors.join('\\n')`);
     assert(!logged, `${vault} logged:\n${logged.slice(0, 500)}`);

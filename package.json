@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test-network": "VITEST_NETWORK=1 VITE_ONLINE=1 vitest run",
     "e2e": "node scripts/e2e.mjs",
-    "phone": "cp main.js manifest.json styles.css \"$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/obsidian-collab-phone/.obsidian/plugins/obsidian-collab/\"",
+    "phone": "cp main.js manifest.json styles.css \"$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/obsidian-collab-phone/.obsidian/plugins/collab/\"",
     "version": "node version-bump.mjs && git add manifest.json versions.json",
     "lint": "eslint .",
     "postinstall": "patch-package"

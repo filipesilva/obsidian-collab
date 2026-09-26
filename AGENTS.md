@@ -82,13 +82,13 @@ npm run build
 - Unit tests: `npm test` runs the fast tests in headless Chromium, which has no Node globals, like Obsidian mobile. `npm run test-deps` downloads the browser once.
 - Network tests: `npm run test-network` runs `src/network.test.ts` and `src/nat.test.ts` in under a minute. It boots the signalling Worker on port 8788 and a local STUN and TURN server on port 3479 (`test/turn-server.mjs`, credentials collab/collab). Two tests also use public Nostr relays and public STUN, so they fail offline. Skip them with `VITEST_NETWORK=1 npx vitest run`. The test browser runs with mDNS candidate hiding off so the local relay can reach real addresses.
 - Trystero fixes one peer id per page, so tests that need a second peer load `src/test/peer.ts` in an iframe and talk to it with postMessage.
-- Phone vault: `obsidian-collab-phone` in iCloud, at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/obsidian-collab-phone`. iCloud carries it to the phone; the plugin lives at `.obsidian/plugins/obsidian-collab/` in it as copies, not symlinks. After a build that should be tested on the phone, copy `main.js`, `manifest.json` and `styles.css` there with `npm run phone`, then reload the plugin on the phone.
+- Phone vault: `obsidian-collab-phone` in iCloud, at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/obsidian-collab-phone`. iCloud carries it to the phone; the plugin lives at `.obsidian/plugins/collab/` in it as copies, not symlinks. After a build that should be tested on the phone, copy `main.js`, `manifest.json` and `styles.css` there with `npm run phone`, then reload the plugin on the phone.
 - Dev vaults: `test-vaults/one`, `two` and `three` in this repo. Open them in Obsidian once so it knows them; after that the e2e opens the ones that are closed by `obsidian://open?path=` and closes those again at the end, so only Obsidian itself needs to be running. `npm run e2e` installs the plugin into them as relative symlinks to the build and enables it, so `npm run build` is picked up on the next reload while settings and collab state stay per vault and out of git.
 - Signalling server: `npm run worker` runs the Cloudflare Worker locally on port 8787, reachable on the LAN. Make `ws://localhost:8787` or `ws://<lan ip>:8787` the only entry in the plugin's Community Collab relays and empty Public Nostr relays to keep sessions local. Source and deploy notes in `worker/`.
 - Drive Obsidian from the terminal with the CLI. `vault=` must come **before** the command, otherwise it is ignored and the command hits whichever window was focused last:
     ```
-    obsidian vault=one plugin:reload id=obsidian-collab
-    obsidian vault=one eval code="app.commands.executeCommandById('obsidian-collab:share-file')"
+    obsidian vault=one plugin:reload id=collab
+    obsidian vault=one eval code="app.commands.executeCommandById('collab:share-file')"
     obsidian dev:errors
     obsidian dev:debug on && obsidian dev:console level=error
     ```
