@@ -1,7 +1,7 @@
 {
   "id": "collab",
   "name": "Collab",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "minAppVersion": "1.13.0",
   "description": "Peer-to-peer collaborative editing sessions on notes, via Yjs over WebRTC.",
   "author": "Filipe Silva",
