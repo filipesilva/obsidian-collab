@@ -352,6 +352,7 @@ describe('the mesh', () => {
   // A peer whose connection dies, as a phone's on a flaky path does, must not
   // cost everyone else theirs.
   it('drops only the peer that stops answering', { timeout: 40000 }, async () => {
+    const from = made.length;
     const config = newConfig(LOCAL_RELAYS, { peerPing: 1000 });
     const me = local(config);
     const b = new Peer(config);
@@ -375,6 +376,7 @@ describe('the mesh', () => {
       await c.leave();
       await me.provider.destroy();
     }
+    await until(() => openSince(from) === 0, `${openSince(from)} of ${made.length - from} peer connections left open`, 10000);
   });
 
   // Each share's URL names its own relays, and a second share connected
