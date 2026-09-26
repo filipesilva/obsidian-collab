@@ -173,7 +173,7 @@ export class Relay implements DurableObject {
     this.remove(ws, id);
     const sub = { ws, id, filters };
     let own = this.subs.get(ws);
-    if (!own) this.subs.set(ws, (own = new Map()));
+    if (!own) this.subs.set(ws, (own = new Map<string, Sub>()));
     own.set(id, sub);
     for (const filter of filters) {
       const keys = tagKeys(filter);

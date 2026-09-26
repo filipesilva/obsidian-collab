@@ -6,7 +6,6 @@ export default defineConfig(
   globalIgnores([
     'node_modules',
     'dist',
-    'worker',
     'test',
     'scripts',
     'test-vaults',
@@ -38,6 +37,13 @@ export default defineConfig(
     rules: {
       '@typescript-eslint/no-base-to-string': ['error', { ignoredTypeNames: ['YText'] }],
       'obsidianmd/ui/sentence-case': ['warn', { acronyms: ['TURN', 'STUN', 'URL'] }],
+    },
+  },
+  {
+    // TypeScript checks names, and the Worker's globals come from Cloudflare's types.
+    files: ['worker/**/*.ts'],
+    rules: {
+      'no-undef': 'off',
     },
   },
   {

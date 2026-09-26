@@ -20,6 +20,7 @@
   "keywords": [],
   "license": "MIT",
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260926.1",
     "@codemirror/commands": "^6.8.1",
     "@codemirror/state": "^6.5.0",
     "@codemirror/view": "^6.38.6",
