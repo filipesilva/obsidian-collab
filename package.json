@@ -1,6 +1,6 @@
 {
   "name": "obsidian-collab",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Peer-to-peer collaborative editing sessions for Obsidian notes",
   "main": "main.js",
   "type": "module",
