@@ -16,7 +16,7 @@ Help keep Obsidian Collab running by [self-hosting](#self-hosting) a community s
 2. Set your name in the plugin ettings if you don't want to show up as Anonymous
 3. Run `Collab: Share file` on the file you want to share
 4. Send peers the URL privately, anyone with the URL can sync the file
-5. Opening the URL prompts Obsidian to create the shared file
+5. Clicking the URL or using `Collab: Open URL` prompts Obsidian to create the shared file
 6. Files will sync between peers that are online
 7. When you're done working together run `Collab: Disconnect file`
 8. Changes you do while disconnected will sync when you connect again

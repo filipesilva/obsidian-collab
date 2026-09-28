@@ -122,7 +122,7 @@ export const modals = {
   regenerate: {
     title: (kind: string) => `Regenerate ${kind} URL`,
     text: (what: string) =>
-      `Makes a new URL for ${what}, with fresh signalling servers and a new secret. The old one stops working. Everyone else pastes the new URL into Open collab URL, or opens it, and it replaces theirs. Their notes and edits carry over.`,
+      `Makes a new URL for ${what}, with fresh signalling servers and a new secret. The old one stops working. Everyone else pastes the new URL into Open URL, or opens it, and it replaces theirs. Their notes and edits carry over.`,
     action: 'Regenerate',
   },
   diagnostics: { title: 'Collab diagnostics', action: 'Copy' },
