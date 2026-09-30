@@ -60,3 +60,6 @@ Runs within the Workers Free plan: 100,000 requests a day, and the Durable
 Object hibernates between messages, so idle rooms cost nothing. Past the
 daily limit new connections fail until midnight UTC and nothing is billed.
 Staying on the Free plan is the cap.
+
+`npm run usage` shows today's usage against the Free plan limits. It uses
+your `wrangler login`.
