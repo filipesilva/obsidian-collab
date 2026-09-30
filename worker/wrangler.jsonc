@@ -1,10 +1,16 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "obsidian-collab",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-09-01",
-  "durable_objects": {
-    "bindings": [{ "name": "RELAY", "class_name": "Relay" }]
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }]
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "obsidian-collab",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-09-01",
+    "durable_objects": {
+        "bindings": [{ "name": "RELAY", "class_name": "Relay" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }],
+    "observability": {
+        "logs": {
+            "enabled": true,
+            "invocation_logs": true
+        }
+    }
 }
