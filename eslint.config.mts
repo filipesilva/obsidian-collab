@@ -8,6 +8,7 @@ export default defineConfig(
     'dist',
     'test',
     'scripts',
+    'worker/scripts',
     'test-vaults',
     'vitest.config.ts',
     'esbuild.config.mjs',
