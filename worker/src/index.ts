@@ -11,6 +11,10 @@ export interface Env {
 
 const MAX_MESSAGE = 65536;
 
+// The plugin's relay probe, answered without waking the object, so it costs
+// no request. Keep in sync with PROBE in src/network.ts.
+const PROBE = JSON.stringify(['REQ', 'collab-probe', { kinds: [20000], '#x': ['collab-probe'], limit: 0 }]);
+
 // NIP-11: how a relay describes itself to clients and relay directories.
 const INFO = {
   name: 'obsidian-collab signalling',
@@ -88,6 +92,7 @@ export class Relay implements DurableObject {
   private subs = new Map<WebSocket, Map<string, Sub>>();
 
   constructor(private state: DurableObjectState) {
+    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PROBE, JSON.stringify(['EOSE', 'collab-probe'])));
     for (const ws of state.getWebSockets()) {
       for (const [id, filters] of Object.entries(ws.deserializeAttachment() as Subscriptions)) this.add(ws, id, filters);
     }

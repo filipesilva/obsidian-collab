@@ -12,9 +12,11 @@ export const TIMING = {
   // How long a relay or a peer may take to answer.
   relayProbe: 4000,
   peerPing: 5000,
-  // The upkeep tick, with peers and alone.
+  // The upkeep tick, with peers and alone. Alone it doubles up to aloneMax,
+  // as each tick then rejoins, and that costs the relay a few requests.
   relayCheck: 30000,
   alone: 10000,
+  aloneMax: 120000,
   // How long to wait for any relay before saying none is reachable.
   reachable: 10000,
 };
@@ -48,10 +50,10 @@ export function closeRelays(): void {
   for (const socket of Object.values(allRelaySockets())) socket.close();
 }
 
-// A subscription a live relay answers at once, in one way or another.
-export function probeRequest(id: string): string {
-  return JSON.stringify(['REQ', id, { kinds: [20000], since: Math.floor(Date.now() / 1000), '#x': [id] }]);
-}
+// A subscription a live relay answers at once, in one way or another. Always
+// the same, so a repeat replaces the last one and the Collab worker answers
+// it without waking. Keep in sync with PROBE in worker/src/index.ts.
+export const PROBE = JSON.stringify(['REQ', 'collab-probe', { kinds: [20000], '#x': ['collab-probe'], limit: 0 }]);
 
 export function pickRelays(relays: string[], count = RELAY_COUNT): string[] {
   const pool = [...relays];
@@ -96,6 +98,7 @@ export class Provider {
   readonly synced = new Promise<true>((resolve) => (this.resolveSynced = () => resolve(true)));
   private checkTimer = 0;
   private attemptsAtLastTick = 0;
+  private idleTicks = 0;
   private timing: typeof TIMING;
   onPeers: ((count: number) => void) | null = null;
   onStatus: ((status: Status) => void) | null = null;
@@ -198,13 +201,15 @@ export class Provider {
   // announce a relay lost or a handshake that missed: Trystero's own next
   // announce is a minute away.
   private schedule() {
-    this.checkTimer = window.setTimeout(() => void this.tick(), this.peers.length ? this.timing.relayCheck : this.timing.alone);
+    const alone = Math.min(this.timing.alone * 2 ** this.idleTicks, this.timing.aloneMax);
+    this.checkTimer = window.setTimeout(() => void this.tick(), this.peers.length ? this.timing.relayCheck : alone);
   }
 
   private async tick(): Promise<void> {
     if (this.destroyed) return;
     const idle = !this.peers.length && !this.peerIds.size && this.attempts === this.attemptsAtLastTick;
     this.attemptsAtLastTick = this.attempts;
+    this.idleTicks = idle ? this.idleTicks + 1 : 0;
     if (idle) await this.rejoin();
     else {
       this.checkRelays();
@@ -258,21 +263,17 @@ export class Provider {
   // Whether the relay behind an open socket says anything after a
   // subscription. Relays answer in different ways; a dead one is silent.
   private probe(socket: WebSocket): Promise<boolean> {
-    const id = `probe-${Math.random().toString(36).slice(2)}`;
     return new Promise((resolve) => {
       const done = (ok: boolean) => {
         window.clearTimeout(timer);
         socket.removeEventListener('message', onMessage);
-        if (ok) {
-          this.resolveReachable(true);
-          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(['CLOSE', id]));
-        }
+        if (ok) this.resolveReachable(true);
         resolve(ok);
       };
       const onMessage = () => done(true);
       const timer = window.setTimeout(() => done(false), this.timing.relayProbe);
       socket.addEventListener('message', onMessage);
-      socket.send(probeRequest(id));
+      socket.send(PROBE);
     });
   }
 

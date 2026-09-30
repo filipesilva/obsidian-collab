@@ -1,4 +1,4 @@
-import { allRelaySockets, pickRelays, probeRequest } from './network';
+import { PROBE, allRelaySockets, pickRelays } from './network';
 import { nat } from './text';
 
 // Whether this network can take a direct connection, judged from what STUN
@@ -148,7 +148,7 @@ function answers(url: string, timeout: number): Promise<boolean> {
       resolve(ok);
     };
     const timer = window.setTimeout(() => done(false), timeout);
-    socket.onopen = () => socket.send(probeRequest('probe'));
+    socket.onopen = () => socket.send(PROBE);
     socket.onmessage = () => done(true);
     socket.onerror = () => done(false);
   });

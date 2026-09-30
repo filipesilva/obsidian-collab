@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { resumeRelayReconnection } from 'trystero';
 import * as Y from 'yjs';
-import { DEFAULT_RELAYS, Provider, RELAY_COUNT, type RoomOptions, allRelaySockets as sockets, closeRelays, pickRelays } from './network';
+import { DEFAULT_RELAYS, PROBE, Provider, RELAY_COUNT, type RoomOptions, allRelaySockets as sockets, closeRelays, pickRelays } from './network';
 
 // The test worker serves one isolated relay per path.
 const RELAY = 'ws://localhost:8788';
@@ -109,6 +109,24 @@ class Peer {
     window.removeEventListener('message', this.onMessage);
     this.iframe.remove();
   }
+}
+
+// What this page sends to relays while `run` goes. Each message is a
+// request the relay pays for.
+async function sent(run: () => Promise<void>): Promise<unknown[][]> {
+  const out: unknown[][] = [];
+  type Send = (this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) => void;
+  const send = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'send')!.value as Send;
+  WebSocket.prototype.send = function (this: WebSocket, data) {
+    if (typeof data === 'string') out.push(JSON.parse(data) as unknown[]);
+    send.call(this, data);
+  };
+  try {
+    await run();
+  } finally {
+    WebSocket.prototype.send = send;
+  }
+  return out;
 }
 
 function newConfig(relays: string[], timing?: RoomOptions['timing']): RoomOptions {
@@ -267,6 +285,24 @@ describe('Provider', () => {
       expect(sockets()[RELAY]).toBe(socket);
       expect(socket.readyState).toBe(WebSocket.OPEN);
     }, { relayProbe: 1000 });
+  });
+
+  // The Collab worker answers this exact message without waking, so a probe
+  // costs it no request. A repeat replaces the last one, so nothing to close.
+  it('probes a relay with one fixed message', { timeout: 20000 }, async () => {
+    const provider = new Provider(new Y.Doc(), newConfig(LOCAL_RELAYS));
+    try {
+      expect(await provider.reachable).toBe(true);
+      // Past the announces of the join.
+      await new Promise((r) => setTimeout(r, 3000));
+      const out = await sent(async () => {
+        provider.checkRelays();
+        await new Promise((r) => setTimeout(r, 1000));
+      });
+      expect(out).toEqual([JSON.parse(PROBE)]);
+    } finally {
+      await provider.destroy();
+    }
   });
 
   it('recovers from a relay socket that looks open but is dead', { timeout: 40000 }, async () => {
@@ -519,6 +555,20 @@ describe('rejoining', () => {
       } finally {
         await peer.leave();
       }
+    } finally {
+      await me.provider.destroy();
+    }
+  });
+
+  // Each rejoin costs the relay a few requests, so alone the cycle slows
+  // down: here after 1, 2 and 4 s, then every 4 s.
+  it('rejoins less often the longer it is alone', { timeout: 30000 }, async () => {
+    const me = local(newConfig(LOCAL_RELAYS, { alone: 1000, aloneMax: 4000 }));
+    try {
+      expect(await me.provider.reachable).toBe(true);
+      const out = await sent(() => new Promise((r) => setTimeout(r, 12000)));
+      const joins = out.filter(([type, id]) => type === 'REQ' && id !== 'collab-probe');
+      expect(joins.length).toBeLessThanOrEqual(5);
     } finally {
       await me.provider.destroy();
     }
