@@ -1,0 +1,24 @@
+diff --git a/node_modules/@trystero-p2p/core/dist/strategy.mjs b/node_modules/@trystero-p2p/core/dist/strategy.mjs
+index 467461c..e35d57a 100644
+--- a/node_modules/@trystero-p2p/core/dist/strategy.mjs
++++ b/node_modules/@trystero-p2p/core/dist/strategy.mjs
+@@ -21,7 +21,6 @@ var strategy_default = ({ init, subscribe, announce, deactivate }) => {
+ 	const sharedPeers = new SharedPeerManager();
+ 	const hasActiveRooms = () => values(occupiedRooms).some((rooms) => keys(rooms).length > 0);
+ 	let didInit = false;
+-	let initPromises = [];
+ 	let cleanupWatchOnline = noOp;
+ 	return (config, roomId, callbacks) => {
+ 		if (!config) throw mkErr("requires a config map as the first argument");
+@@ -128,9 +127,9 @@ var strategy_default = ({ init, subscribe, announce, deactivate }) => {
+ 			isPassive
+ 		};
+ 		const handleMessage = createSignalHandler(ctx);
++		const initRes = init(config);
++		const initPromises = (Array.isArray(initRes) ? initRes : [initRes]).map((value) => Promise.resolve(value));
+ 		if (!didInit) {
+-			const initRes = init(config);
+-			initPromises = (Array.isArray(initRes) ? initRes : [initRes]).map((value) => Promise.resolve(value));
+ 			didInit = true;
+ 			cleanupWatchOnline = config.relayConfig?.manualReconnection ? noOp : watchOnline();
+ 		}

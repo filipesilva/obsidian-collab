@@ -39,6 +39,8 @@ Collab has no telemetry.
 
 ### I can't connect to other peers
 
+First make sure you and your peers are on the latest version of Collab.
+
 Run `Collab: Check network` to see if you should be able to connect right now.
 
 Then `Collab: Diagnostics` and copy paste the result into [a new issue](https://github.com/filipesilva/obsidian-collab/issues/new) so I can try to help.

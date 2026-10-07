@@ -92,7 +92,7 @@ npm run build
     obsidian dev:errors
     obsidian dev:debug on && obsidian dev:console level=error
     ```
-- `patches/` holds patch-package changes to Trystero (offer pool of 3) and y-codemirror.next (remote changes skip editor filters). `npm install` applies them. Why, and when to drop each: `patches/README.md`.
+- `patches/` holds patch-package changes to Trystero (each room joins its own relays) and y-codemirror.next (remote changes skip editor filters). `npm install` applies them. Why, and when to drop each: `patches/README.md`.
 - `npm run e2e` (`scripts/e2e.mjs`) covers the collab flows through the CLI against the three dev vaults, including a connection through the local TURN server with Always relay, reached by the machine's LAN address because Electron refuses a loopback TURN server, so that step needs a network interface up. On a failed step it prints every vault's diagnostics. `CHECKLIST.md` lists the checks e2e cannot do; run it after changes to editor binding or the UI.
 
 ## Commands & settings

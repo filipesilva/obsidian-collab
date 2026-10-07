@@ -473,11 +473,10 @@ describe('TURN', () => {
       expect(await me.provider.paths()).toEqual(['relay']);
       const lines = await me.provider.describeConnections();
       expect(lines.find((l) => l.startsWith('peer '))).toContain('relay>');
-      // The pool is patched down to 3 offers. All are spare when the peer's
-      // offer made the connection, one fewer when ours did.
+      // Offers are made on demand, so no spare connection holds a relay.
       const pool = lines.find((l) => l.startsWith('pool ')) ?? '';
       const spare = [...pool.matchAll(/have-local-offer\/\w+\/new:(\d+)/g)].reduce((n, m) => n + Number(m[1]), 0);
-      expect([2, 3]).toContain(spare);
+      expect(spare).toBe(0);
       peer.insert(' via relay');
       await me.waitText((t) => t === 'hello via relay');
     } finally {

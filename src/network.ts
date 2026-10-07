@@ -5,7 +5,9 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwareness
 import * as syncProtocol from 'y-protocols/sync';
 import type * as Y from 'yjs';
 
-const APP_ID = 'obsidian-collab';
+// Peers only meet others with the same id. When a change breaks the wire
+// format, bump it to the minimum plugin version a peer needs.
+const APP_ID = 'obsidian-collab-v1.1.0';
 export const RELAY_COUNT = 5;
 // Waits and intervals in ms. The network tests shorten them.
 export const TIMING = {
