@@ -1,4 +1,4 @@
-import { Platform } from 'obsidian';
+import { Platform, type SecretStorage } from 'obsidian';
 import type { Collab } from './collab';
 import { checkNat, checkTurn, describeNat, listCandidates, probeSockets, type NatCheck } from './nat';
 import { pickRelays } from './network';
@@ -9,15 +9,15 @@ export function natCheck(settings: CollabSettings): Promise<NatCheck> {
 }
 
 // Everything needed to debug a connection from afar, as text.
-export async function gatherDiagnostics(version: string, settings: CollabSettings, collabs: Iterable<Collab>): Promise<string> {
+export async function gatherDiagnostics(version: string, secrets: SecretStorage, settings: CollabSettings, collabs: Iterable<Collab>): Promise<string> {
   const started = Date.now();
   const platform = Platform.isIosApp ? 'ios' : Platform.isAndroidApp ? 'android' : Platform.isMacOS ? 'macos' : Platform.isWin ? 'windows' : 'linux';
   const lines: string[] = [`collab ${version} ${platform} ${new Date().toISOString()}`, `online=${navigator.onLine}`];
   try {
     const nat = await natCheck(settings);
     lines.push(`nat: ${JSON.stringify(nat)} -> ${describeNat(nat)}`);
-    const turn = turnServer(settings);
-    lines.push(`turn: ${turn ? `${String(turn.urls)} always=${settings.turn.always}` : settings.turn.enabled ? 'none' : 'disabled'}`);
+    const turn = turnServer(secrets, settings);
+    lines.push(`turn: ${turn ? `${String(turn.urls)} always=${settings.turn.always}` : settings.turn.disabled ? 'disabled' : 'none'}`);
     if (turn) lines.push(`turn test: ${await checkTurn(turn)}`);
     const withStun = await listCandidates({ iceServers: [{ urls: settings.stun }] });
     // Candidate lines here start at the component: "1 udp <priority> <address> <port> typ …".

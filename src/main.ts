@@ -587,7 +587,7 @@ export default class CollabPlugin extends Plugin {
   private async refreshVerdict() {
     this.natCheckedAt = Date.now();
     const check = await natCheck(this.settings);
-    const relayed = rtcConfig(this.settings).iceTransportPolicy === 'relay';
+    const relayed = rtcConfig(this.app.secretStorage, this.settings).iceTransportPolicy === 'relay';
     const worrying = !check.online || (!relayed && (check.needsTurn || check.symmetric));
     this.verdict = worrying ? describeNat(check) : null;
     return check;
@@ -596,7 +596,7 @@ export default class CollabPlugin extends Plugin {
   async checkNetwork() {
     const check = await this.refreshVerdict();
     new Notice(notices.network(describeNat(check)), this.verdict ? 15000 : 5000);
-    const turn = turnServer(this.settings);
+    const turn = turnServer(this.app.secretStorage, this.settings);
     if (!turn || !check.online) return;
     const ok = await checkTurn(turn);
     new Notice(ok ? notices.turnWorks : notices.turnFailed, ok ? 5000 : 15000);
@@ -613,7 +613,7 @@ export default class CollabPlugin extends Plugin {
 
   // The e2e reads this.
   diagnostics(): Promise<string> {
-    return gatherDiagnostics(this.manifest.version, this.settings, this.collabs.values());
+    return gatherDiagnostics(this.manifest.version, this.app.secretStorage, this.settings, this.collabs.values());
   }
 
   // Connects with a notice that stays until we know whether relays can
@@ -674,7 +674,7 @@ export default class CollabPlugin extends Plugin {
       clearAlerts(session);
     } else if (status.failures > session.seen.failures) {
       // Relayed connections take longer to settle than direct ones.
-      const turn = !!turnServer(this.settings);
+      const turn = !!turnServer(this.app.secretStorage, this.settings);
       window.clearTimeout(session.failureTimer);
       session.failureTimer = window.setTimeout(
         () => {
@@ -704,7 +704,7 @@ export default class CollabPlugin extends Plugin {
 
   private async open(invite: Invite, path: string): Promise<Collab> {
     if (Date.now() - this.natCheckedAt >= 60000) void this.refreshVerdict();
-    const collab = new Collab(this.app, invite, path, rtcConfig(this.settings), this.store);
+    const collab = new Collab(this.app, invite, path, rtcConfig(this.app.secretStorage, this.settings), this.store);
     collab.setName(this.settings.name);
     collab.onPeers = (count) => {
       const session = this.sessions.get(collab);
@@ -785,7 +785,10 @@ export default class CollabPlugin extends Plugin {
 
   async loadSettings() {
     const saved = (await this.loadData()) as Partial<CollabSettings> | null;
-    this.settings = { ...DEFAULT_SETTINGS, ...saved, turn: { ...DEFAULT_SETTINGS.turn, ...saved?.turn } };
+    // Before 1.0.5 the TURN credentials were here in plaintext. Wipe them.
+    const old = !!saved?.turn && 'credential' in saved.turn;
+    this.settings = { ...DEFAULT_SETTINGS, ...saved, turn: { ...DEFAULT_SETTINGS.turn, ...(old ? {} : saved?.turn) } };
+    if (old) await this.saveData(this.settings);
   }
 
   async saveSettings() {

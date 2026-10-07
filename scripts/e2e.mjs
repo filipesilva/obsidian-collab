@@ -166,8 +166,27 @@ const disconnectAll = (vault) => runAsync(vault, `await ${PLUGIN}.disconnectAll(
 // Electron refuses a TURN server on a loopback address, so the local one is
 // reached by the machine's LAN address.
 const LAN = Object.values(networkInterfaces()).flat().find((i) => i?.family === 'IPv4' && !i.internal)?.address;
+// Goes through the TURN fields in settings: removes saved credentials, then
+// fills in the local server when on.
+const TURN_FIELDS = { Server: `turn:${LAN}:3479`, Username: 'collab', Password: 'collab' };
 const setTurn = (vault, on) =>
-  run(vault, `const p=${PLUGIN}; p.settings.turn=${on ? `{enabled:true, url:'turn:${LAN}:3479', username:'collab', credential:'collab', always:true}` : "{enabled:true, url:'', username:'', credential:'', always:false}"}; p.saveSettings(); 'set'`);
+  runAsync(
+    vault,
+    `const p=${PLUGIN}; p.settings.turn={disabled:false, always:${on}}; await p.saveSettings();
+    app.setting.open(); app.setting.openTabById('collab');
+    const el=app.setting.activeTab.containerEl, tick=()=>new Promise((r)=>setTimeout(r,100));
+    const button=(t)=>[...el.querySelectorAll('button')].find((b)=>b.textContent===t);
+    const input=(n)=>[...el.querySelectorAll('.setting-item')].find((i)=>i.querySelector('.setting-item-name')?.textContent===n).querySelector('input');
+    await tick(); button('Remove')?.click(); await tick();
+    if (${on}) {
+      for (const [n, v] of Object.entries(${JSON.stringify(TURN_FIELDS)})) { const i=input(n); i.value=v; i.dispatchEvent(new Event('input')); }
+      button('Save').click(); await tick();
+    }
+    const saved=!!button('Edit'); app.setting.close();
+    if (saved !== ${on}) throw new Error('TURN credentials saved=' + saved);
+    return 'set';`,
+    10000,
+  );
 const errorsBefore = cli('dev:errors');
 
 async function cleanup() {
@@ -224,7 +243,7 @@ for (const [key, v] of Object.entries(VAULTS)) {
   await runAsync(key, `if (!app.plugins.isEnabled()) await app.plugins.setEnable(true); await app.plugins.loadManifests(); if (!app.plugins.plugins['collab']) await app.plugins.enablePluginAndSave('collab'); return !!app.plugins.plugins['collab'];`, 30000);
 }
 // Leftover settings must not shape the run.
-for (const vault of ALL) setTurn(vault, false);
+for (const vault of ALL) await setTurn(vault, false);
 
 await cleanup();
 for (const vault of ALL) cli(`vault=${VAULTS[vault].name}`, 'plugin:reload', 'id=collab');
@@ -420,7 +439,7 @@ await step('reconnect folder from state and stop sharing', async () => {
 const RELAY_FILE = `${PREFIX} relay.md`;
 await step('b connects through TURN with Always relay', async () => {
   assert(LAN, 'no LAN address, the relay step needs a network interface');
-  setTurn('b', true);
+  await setTurn('b', true);
   // Trystero reuses an idle connection to a known peer across rooms, so a
   // fresh plugin instance is needed for the policy to apply.
   cli(`vault=${VAULTS.b.name}`, 'plugin:reload', 'id=collab');
@@ -437,7 +456,7 @@ await step('b connects through TURN with Always relay', async () => {
     typeIn('a', ' +relay');
     await until('b sees the edit via relay', () => editorText('b').includes('+relay'), 15000);
   } finally {
-    setTurn('b', false);
+    await setTurn('b', false);
   }
 });
 
