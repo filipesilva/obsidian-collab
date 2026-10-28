@@ -10,7 +10,8 @@ import { AskUrl, Confirm, ShowText, confirmJoin, confirmRegenerate, createNote }
 import { maskAddresses } from './mask';
 import { checkTurn, describeNat, preferredLiveRelays } from './nat';
 import { RELAY_COUNT, closeRelays, type Status } from './network';
-import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, turnServer } from './settings';
+import { SETTINGS_VERSION, migrate } from './migrations';
+import { CollabSettings, CollabSettingTab, DEFAULT_SETTINGS, rtcConfig, toSaved, turnServer } from './settings';
 import type { StateStore } from './state';
 import { commands, markerBody, modals, names, notices, status } from './text';
 import { vaultStore } from './vault-store';
@@ -784,16 +785,14 @@ export default class CollabPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const saved = (await this.loadData()) as Partial<CollabSettings> | null;
-    // Before 1.0.5 the TURN credentials were here in plaintext. Wipe them.
-    const old = !!saved?.turn && 'credential' in saved.turn;
-    this.settings = { ...DEFAULT_SETTINGS, ...saved, turn: { ...DEFAULT_SETTINGS.turn, ...(old ? {} : saved?.turn) } };
-    if (old) await this.saveData(this.settings);
+    const { settings, changed } = migrate((await this.loadData()) as Record<string, unknown> | null);
+    this.settings = { ...DEFAULT_SETTINGS, ...settings, turn: { ...DEFAULT_SETTINGS.turn, ...settings.turn } };
+    if (changed) await this.saveSettings();
   }
 
   async saveSettings() {
     for (const collab of this.collabs.values()) collab.setName(this.settings.name);
-    await this.saveData(this.settings);
+    await this.saveData({ ...toSaved(this.settings), version: SETTINGS_VERSION });
   }
 }
 

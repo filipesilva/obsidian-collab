@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, type SecretStorage, type SettingDefinitionItem, type SettingDefinitionRender } from 'obsidian';
 import type CollabPlugin from './main';
+import { sameList } from './migrations';
 import { checkTurn } from './nat';
 import { COMMUNITY_RELAYS, DEFAULT_RELAYS, DEFAULT_STUN } from './network';
 import { notices, settings as labels } from './text';
@@ -26,6 +27,15 @@ export const DEFAULT_SETTINGS: CollabSettings = {
   stun: DEFAULT_STUN,
   turn: { disabled: false, always: false },
 };
+
+const LISTS = ['community', 'relays', 'stun'] as const;
+
+// Lists left at their default are not saved, so a new default reaches everyone.
+export function toSaved(settings: CollabSettings): Partial<CollabSettings> {
+  const out: Partial<CollabSettings> = { ...settings };
+  for (const key of LISTS) if (sameList(settings[key], DEFAULT_SETTINGS[key])) delete out[key];
+  return out;
+}
 
 const SELF_HOSTING = 'https://github.com/filipesilva/obsidian-collab#self-hosting';
 
